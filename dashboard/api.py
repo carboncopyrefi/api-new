@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 import django
 import os
 from pydantic import BaseModel, Field
@@ -8,6 +8,7 @@ from django.db.models import Sum, Max, Count
 from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
 from .utils import get_all_baserow_data
+from .security import get_api_key
 
 # Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
@@ -15,7 +16,7 @@ django.setup()
 
 from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, AggregateMetricType  # noqa: E402
 
-app = FastAPI(title="Project Metrics API")
+app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 
 
 # -----------------------------
@@ -498,7 +499,7 @@ def get_projects():
 
 
 @app.get(
-    "/projects/{baserow_id}/data",
+    "/projects/{baserow_id}/metrics",
     response_model=List[ProjectMetricData],
     summary="Get metrics for a specific project",
     responses={

@@ -3,7 +3,7 @@ from urllib.request import urlopen
 from django import forms
 from django.utils.html import format_html
 from django.contrib import admin
-from .models import Project, AggregateMetric, ProjectMetric, ProjectMetricData
+from .models import Project, AggregateMetric, ProjectMetric, ProjectMetricData, APIKey
 from . import utils
 from django.utils import timezone
 
@@ -230,3 +230,10 @@ class ProjectMetricDataAdmin(admin.ModelAdmin):
                 request,
                 f"Added {delta_value} (delta) to {metric.name}, latest value = {metric.current_value}"
             )
+
+@admin.register(APIKey)
+class APIKeyAdmin(admin.ModelAdmin):
+    list_display = ("name", "key", "active", "created_at")
+    list_filter = ("active",)
+    search_fields = ("name", "key")
+    readonly_fields = ("key", "created_at")

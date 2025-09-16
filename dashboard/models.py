@@ -1,4 +1,5 @@
 from django.db import models
+import secrets
 
 format_choices = [
         ('{:,.2f}', 'Comma separated, 2 decimal places'),
@@ -100,3 +101,23 @@ class ProjectMetricData(models.Model):
 
     def __str__(self):
         return f"{self.value} on {self.date}"
+    
+
+class APIKey(models.Model):
+    name = models.CharField(max_length=100, help_text="Label for the key (e.g. client name)")
+    key = models.CharField(max_length=64, unique=True, db_index=True, editable=False)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @staticmethod
+    def generate_key():
+        # Generates a 64-char hex string
+        return secrets.token_hex(32)
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            self.key = self.generate_key()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({'active' if self.active else 'inactive'})"
