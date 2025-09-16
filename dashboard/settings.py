@@ -32,7 +32,7 @@ SUBGRAPH_KEY = os.getenv("SUBGRAPH_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["carboncopy.pythonanywhere.com"]
 
 ASGI_APPLICATION = "asgi.app"
 
