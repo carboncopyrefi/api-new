@@ -32,7 +32,7 @@ SUBGRAPH_KEY = os.getenv("SUBGRAPH_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["carboncopy.pythonanywhere.com"]
+ALLOWED_HOSTS = ["carboncopy.pythonanywhere.com", "127.0.0.1"]
 
 ASGI_APPLICATION = "asgi.app"
 
@@ -90,7 +90,8 @@ DATABASES = {
             'USER': 'root',
             'PASSWORD': 'JaMWoQ98H9yRb8#GCDP2ezJpHLa^fkwV',
             'HOST': 'localhost',
-            'PORT': '3306'
+            'PORT': '3306',
+            'STRICT_MODE': True,
         }
 }
 
