@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
-import django
-import os
+import django, os
 from pydantic import BaseModel, Field
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
@@ -9,7 +8,7 @@ from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
 from .utils import get_all_baserow_data
 from .security import get_api_key
-from django.db import close_old_connections
+from django.db import connections
 
 # Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
@@ -20,16 +19,24 @@ from .models import Project, ProjectMetric, ProjectMetricData as MetricData, Agg
 # app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 app = FastAPI(title="CARBON Copy API")
 
-@app.middleware("http")
-async def db_session_middleware(request, call_next):
-    # Before request → close stale connections
-    close_old_connections()
+def get_django_db_connection():
+    """
+    FastAPI dependency to manage Django DB connection lifecycle.
+    """ 
+    conn = connections['default']
+
+    def safe_is_usable(c):
+        try:
+            return c.is_usable()
+        except Exception:
+            return False
     try:
-        response = await call_next(request)
+        if not safe_is_usable(conn):
+            conn.close()
+            conn.connect()
+        yield conn
     finally:
-        # After request → ensure no leaks
-        close_old_connections()
-    return response
+        conn.close()
 
 # -----------------------------
 # Pydantic Models
@@ -499,7 +506,7 @@ def read_root():
         }
     }
 )
-def get_projects():
+def get_projects(db_conn=Depends(get_django_db_connection)):
     projects = Project.objects.all()
     return [
         ProjectSummary(
@@ -655,42 +662,42 @@ def get_overview():
 def venture_funding_endpoint():
     return get_venture_funding_data()
 
-@app.get("/test-db", summary="Test DB connection recovery")
-def test_db_connection():
-    from django.db import connections
-    from fastapi.responses import JSONResponse
-    conn = connections['default']
+# @app.get("/test-db", summary="Test DB connection recovery")
+# def test_db_connection():
+#     from django.db import connections
+#     from fastapi.responses import JSONResponse
+#     conn = connections['default']
 
-    def safe_is_usable(c):
-        try:
-            return c.is_usable()
-        except Exception:
-            return False
+#     def safe_is_usable(c):
+#         try:
+#             return c.is_usable()
+#         except Exception:
+#             return False
 
-    # Step 1: Check current connection usability
-    before = safe_is_usable(conn)
+#     # Step 1: Check current connection usability
+#     before = safe_is_usable(conn)
 
-    # Step 2: Force-close the connection
-    conn.close()
-    forced_closed = not safe_is_usable(conn)
+#     # Step 2: Force-close the connection
+#     conn.close()
+#     forced_closed = not safe_is_usable(conn)
 
-    # Step 3: Run Django’s cleanup
-    close_old_connections()
-    after = safe_is_usable(connections['default'])
+#     # Step 3: Run Django’s cleanup
+#     close_old_connections()
+#     after = safe_is_usable(connections['default'])
 
-    # Step 4: Try an actual query to prove recovery
-    from .models import Project
-    try:
-        count = Project.objects.count()
-        query_ok = True
-    except Exception as e:
-        count = str(e)
-        query_ok = False
+#     # Step 4: Try an actual query to prove recovery
+#     from .models import Project
+#     try:
+#         count = Project.objects.count()
+#         query_ok = True
+#     except Exception as e:
+#         count = str(e)
+#         query_ok = False
 
-    return JSONResponse({
-        "before_close": before,
-        "after_forced_close": forced_closed,
-        "after_cleanup": after,
-        "query_ok": query_ok,
-        "project_count": count,
-    })
+#     return JSONResponse({
+#         "before_close": before,
+#         "after_forced_close": forced_closed,
+#         "after_cleanup": after,
+#         "query_ok": query_ok,
+#         "project_count": count,
+#     })
