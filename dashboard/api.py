@@ -20,6 +20,16 @@ from .models import Project, ProjectMetric, ProjectMetricData as MetricData, Agg
 # app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 app = FastAPI(title="CARBON Copy API")
 
+@app.middleware("http")
+async def db_session_middleware(request, call_next):
+    # Before request → close stale connections
+    close_old_connections()
+    try:
+        response = await call_next(request)
+    finally:
+        # After request → ensure no leaks
+        close_old_connections()
+    return response
 
 # -----------------------------
 # Pydantic Models
@@ -458,17 +468,6 @@ def get_venture_funding_data() -> VentureFundingResponse:
 # Routes
 # -----------------------------
 
-@app.middleware("http")
-async def db_session_middleware(request, call_next):
-    # Before request → close stale connections
-    close_old_connections()
-    try:
-        response = await call_next(request)
-    finally:
-        # After request → ensure no leaks
-        close_old_connections()
-    return response
-
 @app.get("/", summary="Root endpoint")
 def read_root():
     return {"message": "FastAPI + Django working"}
@@ -655,3 +654,43 @@ def get_overview():
 )
 def venture_funding_endpoint():
     return get_venture_funding_data()
+
+@app.get("/test-db", summary="Test DB connection recovery")
+def test_db_connection():
+    from django.db import connections
+    from fastapi.responses import JSONResponse
+    conn = connections['default']
+
+    def safe_is_usable(c):
+        try:
+            return c.is_usable()
+        except Exception:
+            return False
+
+    # Step 1: Check current connection usability
+    before = safe_is_usable(conn)
+
+    # Step 2: Force-close the connection
+    conn.close()
+    forced_closed = not safe_is_usable(conn)
+
+    # Step 3: Run Django’s cleanup
+    close_old_connections()
+    after = safe_is_usable(connections['default'])
+
+    # Step 4: Try an actual query to prove recovery
+    from .models import Project
+    try:
+        count = Project.objects.count()
+        query_ok = True
+    except Exception as e:
+        count = str(e)
+        query_ok = False
+
+    return JSONResponse({
+        "before_close": before,
+        "after_forced_close": forced_closed,
+        "after_cleanup": after,
+        "query_ok": query_ok,
+        "project_count": count,
+    })
