@@ -9,6 +9,7 @@ from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
 from .utils import get_all_baserow_data
 from .security import get_api_key
+from django.db import close_old_connections
 
 # Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
@@ -456,6 +457,18 @@ def get_venture_funding_data() -> VentureFundingResponse:
 # -----------------------------
 # Routes
 # -----------------------------
+
+@app.middleware("http")
+async def db_session_middleware(request, call_next):
+    # Before request → close stale connections
+    close_old_connections()
+    try:
+        response = await call_next(request)
+    finally:
+        # After request → ensure no leaks
+        close_old_connections()
+    return response
+
 @app.get("/", summary="Root endpoint")
 def read_root():
     return {"message": "FastAPI + Django working"}
