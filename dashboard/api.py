@@ -553,7 +553,7 @@ def get_projects(db_conn=Depends(get_django_db_connection)):
         404: {"description": "Project not found"}
     }
 )
-def get_project_metrics_data(baserow_id: int):
+def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_connection)):
     try:
         project = Project.objects.get(baserow_id=baserow_id)
     except Project.DoesNotExist:
@@ -622,7 +622,7 @@ def get_project_metrics_data(baserow_id: int):
         }
     }
 )
-def get_aggregate_metric_types():
+def get_aggregate_metric_types(db_conn=Depends(get_django_db_connection)):
     from .models import AggregateMetricType
 
     types = AggregateMetricType.objects.all().order_by("name")
@@ -642,7 +642,7 @@ def get_aggregate_metric_types():
     summary="Get Aggregate Metric Type",
     description="Returns the aggregate metrics for the given type slug. The type slug must exist in AggregateMetric.TYPE_CHOICES."
 )
-def aggregate_metric_type_endpoint(type_slug: str):
+def aggregate_metric_type_endpoint(type_slug: str, db_conn=Depends(get_django_db_connection)):
     return get_aggregate_metric_type_db_optimized(type_slug)
 
 @app.get(
@@ -650,7 +650,7 @@ def aggregate_metric_type_endpoint(type_slug: str):
     response_model=OverviewResponse,
     summary="Overview of Funding Metrics"
 )
-def get_overview():
+def get_overview(db_conn=Depends(get_django_db_connection)):
     return get_overview_data()
 
 @app.get(
@@ -659,45 +659,5 @@ def get_overview():
     summary="Venture Funding Overview",
     description="Returns total venture funding, deals, charts, project breakdown, and current year deals"
 )
-def venture_funding_endpoint():
+def venture_funding_endpoint(db_conn=Depends(get_django_db_connection)):
     return get_venture_funding_data()
-
-# @app.get("/test-db", summary="Test DB connection recovery")
-# def test_db_connection():
-#     from django.db import connections
-#     from fastapi.responses import JSONResponse
-#     conn = connections['default']
-
-#     def safe_is_usable(c):
-#         try:
-#             return c.is_usable()
-#         except Exception:
-#             return False
-
-#     # Step 1: Check current connection usability
-#     before = safe_is_usable(conn)
-
-#     # Step 2: Force-close the connection
-#     conn.close()
-#     forced_closed = not safe_is_usable(conn)
-
-#     # Step 3: Run Django’s cleanup
-#     close_old_connections()
-#     after = safe_is_usable(connections['default'])
-
-#     # Step 4: Try an actual query to prove recovery
-#     from .models import Project
-#     try:
-#         count = Project.objects.count()
-#         query_ok = True
-#     except Exception as e:
-#         count = str(e)
-#         query_ok = False
-
-#     return JSONResponse({
-#         "before_close": before,
-#         "after_forced_close": forced_closed,
-#         "after_cleanup": after,
-#         "query_ok": query_ok,
-#         "project_count": count,
-#     })
