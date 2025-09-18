@@ -17,6 +17,7 @@ django.setup()
 from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, AggregateMetricType  # noqa: E402
 
 app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
+# app = FastAPI(title="CARBON Copy API")
 
 
 # -----------------------------
@@ -41,6 +42,7 @@ class ProjectMetricData(BaseModel):
 
 class AggregateMetricTypeList(BaseModel):
     name: str = Field(..., example="Total Installed Capacity")
+    description: Optional[str] = Field(None, example="Sum of installed capacity across all projects")   
     slug: str = Field(..., example="total-installed-capacity")
     pie_chart: str = Field(..., example="Project", description="Pie chart grouping for this metric type")
 
@@ -69,6 +71,7 @@ class PieChartData(BaseModel):
 
 class AggregateMetricTypeResponse(BaseModel):
     type_name: str
+    description: Optional[str] = None
     metrics: List[AggregateMetricItem]
     table: AggregateMetricTypeTable
     projects_count: int = Field(..., description="Number of distinct projects contributing to this metric type")
@@ -151,7 +154,6 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
     
     chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
     chart_data_map = defaultdict(lambda: {"month": None})  # keyed by month-year string
-
 
     for agg in agg_qs:
         pm_qs = ProjectMetric.objects.filter(aggregate_metric=agg)
@@ -297,6 +299,7 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
 
     return AggregateMetricTypeResponse(
         type_name=type_display,
+        description=type_obj.description,
         projects_count=projects_count,
         metrics=metrics_out,
         table=table,

@@ -22,6 +22,7 @@ class Project(models.Model):
 
 class AggregateMetricType(models.Model):
     name = models.CharField(max_length=255)
+    description = models.CharField(max_length=200, null=True, blank=True)
     slug = models.SlugField(unique=True)
     pie_chart = models.CharField(max_length=20, choices=pie_chart_choices)
 
