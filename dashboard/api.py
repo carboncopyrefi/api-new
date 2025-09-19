@@ -9,6 +9,8 @@ from collections import defaultdict
 from .utils import get_all_baserow_data
 from .security import get_api_key
 from django.db import connections
+from django.conf import settings
+from django.utils.timezone import make_aware
 
 # Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
@@ -179,8 +181,11 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
         total_value_row = pm_qs.aggregate(total=Coalesce(Sum('current_value'), 0.0))
         total_value = float(total_value_row['total'] or 0.0)
 
-        latest_date_row = pm_qs.aggregate(latest=Max('current_value_date'))
-        latest_date = latest_date_row['latest']
+        # latest_date_row = pm_qs.aggregate(latest=Max('current_value_date'))
+
+        naive_latest_date = datetime.now()
+        settings.TIME_ZONE
+        latest_date = make_aware(naive_latest_date)
 
         if latest_date is None:
             metrics_out.append(
@@ -252,11 +257,18 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
             )
 
             running_total = 0.0
+            last_value = 0.0  # keeps track of last seen value for this metric
+
             for entry in month_values:
                 running_total += float(entry['total'] or 0.0)
                 date_str = entry['month'].strftime('%Y-%m')
+
                 chart_data_map[date_str]["month"] = date_str
-                chart_data_map[date_str][agg.name] = running_total
+
+                # If there was data for this month, use it; otherwise carry forward the last value
+                if entry['total'] is not None:
+                    last_value = running_total
+                chart_data_map[date_str][agg.name] = last_value
 
         # ---- Pie chart (project breakdown) ----
         pie_chart_data = None
