@@ -593,7 +593,7 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
                 unit=metric.unit,
                 format=metric.format,
                 description=metric.description,
-                percent_change_7d=(
+                percent_change_7d=round((
                     ((cd[-1][1] - val_7d) / val_7d * 100)
                     if (val_7d := next(
                         (total for date, total in reversed(cd)
@@ -601,8 +601,8 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
                         None
                     )) not in (None, 0)
                     else None
-                ),
-                percent_change_28d=(
+                ), 2) if cd else None,
+                percent_change_28d=round((
                     ((cd[-1][1] - val_28d) / val_28d * 100)
                     if (val_28d := next(
                         (total for date, total in reversed(cd)
@@ -610,7 +610,7 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
                         None
                     )) not in (None, 0)
                     else None
-                ),
+                ), 2) if cd else None,
             )
         )(build_cumulative(metric))
         for metric in project.metrics.all()
@@ -673,3 +673,22 @@ def get_overview(db_conn=Depends(get_django_db_connection)):
 )
 def venture_funding_endpoint(db_conn=Depends(get_django_db_connection)):
     return get_venture_funding_data()
+
+
+@app.get("/link-preview")
+async def link_preview(url: str):
+    import requests
+    from bs4 import BeautifulSoup
+
+    res = requests.get(url, timeout=5)
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    def get_meta(prop):
+        tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+        return tag["content"] if tag and "content" in tag.attrs else ""
+
+    return {
+        "title": get_meta("og:title") or soup.title.string if soup.title else url,
+        "description": get_meta("og:description"),
+        "image": get_meta("og:image"),
+    }
