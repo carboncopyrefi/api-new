@@ -120,27 +120,50 @@ class ProjectMetricAdmin(admin.ModelAdmin):
                 # 2) Extract JSON file URL
                 json_url = result["Impact Metrics JSON"][0]["url"]
 
-                # 3) Download JSON and extract "source"
+                # 3) Download JSON
                 response = urlopen(json_url)
                 data = json.loads(response.read())
-                source_value = data['impact_data'][0]['source']
+
+                if "impact_data" not in data or not isinstance(data["impact_data"], list):
+                    self.message_user(request, f"No impact_data found for {metric.name}", level="error")
+                    continue
+
+                # --- find the correct source block where db_id matches ---
+                matched_item = None
+                matched_metric = None
+                for item in data["impact_data"]:
+                    for m in item.get("metrics", []):
+                        if m.get("db_id") == db_id:
+                            matched_item = item
+                            matched_metric = m.get("db_id")
+                            break
+                    if matched_item:
+                        break
+
+                if not matched_item or not matched_metric:
+                    self.message_user(request, f"No impact_data entry found for db_id={db_id} ({metric.name})", level="error")
+                    continue
+
+                source_value = matched_item.get("source")
 
                 if not source_value:
                     self.message_user(request, f"No source found for {metric.name}", level="error")
                     continue
 
-                # 4) Call refresh function based on source_value
+                # 4) Resolve function dynamically
                 func_name = f"refresh_{source_value}"
                 if not hasattr(update_metrics, func_name):
                     self.message_user(request, f"Function {func_name} not found in update_metrics.py", level="error")
                     continue
                 func = getattr(update_metrics, func_name)
-                value = func(data['impact_data'][0], db_id)  # Pass full impact JSON
 
-                if not isinstance(value, float):
+                # pass both the matched source block and the specific metric config
+                value = func(matched_item, matched_metric)
+                print(type(value))
+                if not isinstance(value, (float, int)):
                     self.message_user(request, f"Invalid return value from {func_name}", level="error")
                     continue
-               
+
                 now = timezone.now()
 
                 # Step 5: Get last record for this metric
@@ -152,35 +175,35 @@ class ProjectMetricAdmin(admin.ModelAdmin):
                 )
 
                 if last_record is None:
-                    # No prior data → store the actual value
                     record_value = value
                 else:
-                    # Store the delta (can be zero or negative)
                     record_value = value - metric.current_value
 
-                # Step 6: Update ProjectMetricData table              
+                # Step 6: Store record
                 record = ProjectMetricData.objects.create(
                     value=round(record_value, 2),
                     date=now,
                 )
                 record.project_metrics.add(metric)
 
-                # Step 7: Update ProjectMetric table
+                # Step 7: Update ProjectMetric
                 metric.current_value = round(value, 2)
                 metric.current_value_date = now
                 metric.save(update_fields=["current_value", "current_value_date"])
 
                 self.message_user(
                     request,
-                    f"Updated {metric.name}: stored {record_value} (delta mode), latest value = {value}"
+                    f"Updated {metric.name}: stored delta {record_value}, latest value = {value}"
                 )
 
             except Exception as e:
                 self.message_user(
                     request,
                     f"Error updating '{metric.name}': {e}",
-                    level='error'
+                    level="error"
                 )
+
+
 
     update_impact_data.short_description = "Update impact data"
 
