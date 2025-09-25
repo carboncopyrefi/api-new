@@ -164,11 +164,11 @@ def refresh_graphql(impact: dict, db_id: int):
             if metric["result_key"] in r:
                 cumulative_value += float(r[metric["result_key"]])
 
-        if impact["global_operator"] == "divide":
-            cumulative_value = cumulative_value / impact["global_denominator"]
+        if metric["operator"] == "divide":
+            cumulative_value = cumulative_value / metric["denominator"]
 
-        if impact["global_operator"] == "multiply":
-            cumulative_value = cumulative_value * impact["global_denominator"]
+        if metric["operator"] == "multiply":
+            cumulative_value = cumulative_value * metric["denominator"]
 
         return cumulative_value
 
