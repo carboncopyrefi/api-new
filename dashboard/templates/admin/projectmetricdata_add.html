@@ -1,0 +1,23 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+{% block content %}
+  <div style="display: flex; gap: 2rem;">
+    <!-- Single value form -->
+    <div style="flex: 1;">
+      <h2>Single entry</h2>
+      <form method="post">{% csrf_token %}
+        {{ single_form.as_p }}
+        <input type="submit" value="Save" class="default">
+      </form>
+    </div>
+
+    <!-- CSV upload -->
+    <div style="flex: 1;">
+      <h2>Bulk upload (CSV)</h2>
+      <form method="post" enctype="multipart/form-data">{% csrf_token %}
+        {{ csv_form.as_p }}
+        <input type="submit" value="Upload" class="default">
+      </form>
+    </div>
+  </div>
+{% endblock %}

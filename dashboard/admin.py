@@ -1,11 +1,12 @@
-import requests, json
+import requests, json, csv
 from urllib.request import urlopen
 from django import forms
 from django.utils.html import format_html
-from django.contrib import admin
+from django.contrib import admin, messages
 from .models import Project, AggregateMetric, ProjectMetric, ProjectMetricData, APIKey
 from . import utils
 from django.utils import timezone
+from django.shortcuts import render, redirect
 
 API_URL = "https://api.carboncopy.news/projects"
 
@@ -193,7 +194,6 @@ class ProjectMetricDataAdmin(admin.ModelAdmin):
             f"{pm.name} ({', '.join(p.name for p in pm.projects.all())})"
             for pm in obj.project_metrics.all()
         )
-    
     get_metrics.short_description = "Metrics"
 
     def has_view_permission(self, request, obj=None):
@@ -201,35 +201,83 @@ class ProjectMetricDataAdmin(admin.ModelAdmin):
         return False
 
     def changelist_view(self, request, extra_context=None):
-        # Redirect the list view to the add form
         from django.shortcuts import redirect
         return redirect("admin:dashboard_projectmetricdata_add")
 
-    def save_model(self, request, obj, form, change):
-        super().save_model(request, obj, form, change)
+    def add_view(self, request, form_url="", extra_context=None):
+        """
+        Override the add view to show both single-value entry and CSV upload.
+        """
+        single_form = self.get_form(request)(request.POST or None)
+        csv_form = utils.CSVUploadForm(request.POST or None, request.FILES or None)
 
-    def save_related(self, request, form, formsets, change):
-        super().save_related(request, form, formsets, change)
+        if request.method == "POST":
+            if "csv_file" in request.FILES:  # CSV upload case
+                if csv_form.is_valid():
+                    return self.handle_csv_upload(request, csv_form)
+            else:  # single entry case
+                if single_form.is_valid():
+                    obj = single_form.save(commit=False)
+                    obj.save()
+                    single_form.save_m2m()
+                    self.save_related(request, single_form, [], False)
+                    messages.success(request, "Single ProjectMetricData record added.")
+                    return redirect("admin:dashboard_projectmetricdata_add")
 
-        obj = form.instance  # The saved ProjectMetricData
-        metrics = obj.project_metrics.all()
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "single_form": single_form,
+            "csv_form": csv_form,
+            "title": "Add Project Metric Data (single or bulk)",
+        }
+        return render(request, "admin/projectmetricdata_add.html", context)
 
-        for metric in metrics:
+    def handle_csv_upload(self, request, form):
+        """
+        Process uploaded CSV and create records for one metric.
+        """
+        csv_file = form.cleaned_data["csv_file"]
+        metric = form.cleaned_data["project_metric"]
+
+        decoded_file = csv_file.read().decode("utf-8-sig").splitlines()
+        reader = csv.DictReader(decoded_file)
+        print(reader.fieldnames)
+
+        if not {"date", "value"}.issubset(reader.fieldnames):
+            messages.error(request, "CSV must have 'date' and 'value' columns.")
+            return redirect("admin:dashboard_projectmetricdata_add")
+
+        for row in reader:
+            try:
+                date = row["date"]
+                value = float(row["value"])
+            except Exception as e:
+                messages.error(request, f"Invalid row {row}: {e}")
+                continue
+
+            # Delta calculation
             if metric.current_value is None:
-                delta_value = obj.value
+                delta_value = value
             else:
-                delta_value = obj.value - metric.current_value
+                delta_value = value - metric.current_value
 
-            metric.current_value = round(
-                metric.current_value + delta_value if metric.current_value else obj.value, 2
+            record = ProjectMetricData.objects.create(
+                value=round(delta_value, 2),
+                date=date,
             )
-            metric.current_value_date = obj.date
+            record.project_metrics.add(metric)
+
+            # Update ProjectMetric
+            metric.current_value = round(value, 2)
+            metric.current_value_date = date
             metric.save(update_fields=["current_value", "current_value_date"])
 
-            self.message_user(
-                request,
-                f"Added {delta_value} (delta) to {metric.name}, latest value = {metric.current_value}"
-            )
+        messages.success(
+            request,
+            f"CSV uploaded successfully for {metric.name} ({', '.join(p.name for p in metric.projects.all())})."
+        )
+        return redirect("admin:dashboard_projectmetricdata_add")
 
 @admin.register(APIKey)
 class APIKeyAdmin(admin.ModelAdmin):

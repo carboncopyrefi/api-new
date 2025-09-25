@@ -566,6 +566,10 @@ def get_projects(db_conn=Depends(get_django_db_connection)):
     }
 )
 def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_connection)):
+    naive_latest_date = datetime.now()
+    settings.TIME_ZONE
+    today = make_aware(naive_latest_date)
+
     try:
         project = Project.objects.get(baserow_id=baserow_id)
     except Project.DoesNotExist:
@@ -585,36 +589,36 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
         return cumulative_data
 
     return [
-        (
-            lambda cd: ProjectMetricData(
+    (
+        lambda cd: (
+            lambda latest_date: ProjectMetricData(
                 name=metric.name,
                 current_value=cd[-1][1] if cd else None,
                 current_value_date=cd[-1][0] if cd else None,
                 unit=metric.unit,
                 format=metric.format,
                 description=metric.description,
-                percent_change_7d=round((
-                    ((cd[-1][1] - val_7d) / val_7d * 100)
-                    if (val_7d := next(
-                        (total for date, total in reversed(cd)
-                         if date <= cd[-1][0] - timedelta(days=8)),
+                percent_change_7d=(
+                    round(((cd[-1][1] - val_7d) / val_7d * 100), 2)
+                    if cd and (val_7d := next(
+                        iter([total for date, total in reversed(cd) if date <= today - timedelta(days=7)]),
                         None
                     )) not in (None, 0)
                     else None
-                ), 2) if cd else None,
-                percent_change_28d=round((
-                    ((cd[-1][1] - val_28d) / val_28d * 100)
-                    if (val_28d := next(
-                        (total for date, total in reversed(cd)
-                         if date <= cd[-1][0] - timedelta(days=28)),
+                ),
+                percent_change_28d=(
+                    round(((cd[-1][1] - val_28d) / val_28d * 100), 2)
+                    if cd and (val_28d := next(
+                        iter([total for date, total in reversed(cd) if date <= today - timedelta(days=28)]),
                         None
                     )) not in (None, 0)
                     else None
-                ), 2) if cd else None,
+                ),
             )
-        )(build_cumulative(metric))
-        for metric in project.metrics.all()
-    ]
+        )(datetime.now().date())
+    )(build_cumulative(metric))
+    for metric in project.metrics.all()
+]
 
 @app.get(
     "/aggregate-metric-types",

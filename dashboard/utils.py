@@ -1,5 +1,6 @@
 
 import requests, os
+from django import forms
 from .models import ProjectMetric
 
 BASEROW_API = "https://api.baserow.io/api/database/rows/table/"
@@ -50,3 +51,18 @@ def get_all_baserow_data(table_id: str, params: str) -> list[dict]:
         url = data.get("next")  # None when finished
 
     return all_results
+
+class CSVUploadForm(forms.Form):
+    csv_file = forms.FileField(label="CSV file")
+    project_metric = forms.ModelChoiceField(
+        queryset=ProjectMetric.objects.all(),
+        required=True,
+        label="Metric"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Label: "Metric name (Project name)"
+        self.fields["project_metric"].label_from_instance = (
+            lambda obj: f"{obj.name} ({', '.join(p.name for p in obj.projects.all())})"
+        )
