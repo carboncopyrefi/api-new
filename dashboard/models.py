@@ -16,6 +16,7 @@ class Project(models.Model):
     baserow_id = models.PositiveIntegerField("Baserow ID", unique=True)
     name = models.CharField(max_length=255)
     logo_url = models.URLField(blank=True, null=True)
+    slug = models.CharField(max_length=100, null=True)
 
     def __str__(self):
         return self.name

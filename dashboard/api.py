@@ -48,6 +48,7 @@ class ProjectSummary(BaseModel):
     name: str = Field(..., example="Solar Energy Initiative")
     logo_url: Optional[str] = Field(None, example="https://example.com/logo.png")
     metrics: List[str] = Field(..., example=["Installed Capacity", "CO2 Savings"])
+    slug: Optional[str] = Field(None, example="solar-energy-initiative")
 
 class ProjectMetricData(BaseModel):
     """Detailed information about a project metric."""
@@ -505,12 +506,14 @@ def read_root():
                         {
                             "name": "Solar Energy Initiative",
                             "logo_url": "https://example.com/logo.png",
-                            "metrics": ["Installed Capacity", "CO2 Savings"]
+                            "metrics": ["Installed Capacity", "CO2 Savings"],
+                            "slug": "solar-energy-initiative"
                         },
                         {
                             "name": "Wind Farm Alpha",
                             "logo_url": "https://example.com/windfarm.png",
-                            "metrics": ["Annual Output", "CO2 Savings"]
+                            "metrics": ["Annual Output", "CO2 Savings"],
+                            "slug": "wind-farm-alpha"
                         }
                     ]
                 }
@@ -526,7 +529,8 @@ def get_projects(db_conn=Depends(get_django_db_connection)):
             logo_url=project.logo_url,
             metrics=list(
                 project.metrics.values_list("name", flat=True).distinct()
-            )
+            ),
+            slug=project.slug
         )
         for project in projects
     ]

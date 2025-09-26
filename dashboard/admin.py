@@ -49,6 +49,7 @@ class ProjectSelectForm(forms.ModelForm):
             self.instance.baserow_id = selected_project["id"]
             self.instance.name = selected_project["name"]
             self.instance.logo_url = selected_project.get("logo", "")
+            self.instance.slug = selected_project["slug"]
 
         return super().save(commit=commit)
 
@@ -79,7 +80,7 @@ class ProjectMetricDataForm(forms.ModelForm):
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
     form = ProjectSelectForm
-    list_display = ("name", "baserow_id", "logo_url")
+    list_display = ("name", "slug", "baserow_id", "logo_url")
 
 @admin.register(AggregateMetric)
 class AggregateMetricAdmin(admin.ModelAdmin):
