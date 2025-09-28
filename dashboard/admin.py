@@ -65,6 +65,13 @@ class ProjectMetricDataForm(forms.ModelForm):
         widget=forms.SelectDateWidget(years=range(2000, timezone.now().year + 1)),
         label="Date",
     )
+    save_delta = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Save as cumulative value",
+        help_text="If checked, the entered value will be treated as a cumulative value. "
+                  "If unchecked, the entered value will be treated as a one-off value."
+    )
 
     class Meta:
         model = ProjectMetricData
@@ -242,27 +249,38 @@ class ProjectMetricDataAdmin(admin.ModelAdmin):
             else:  # single entry case
                 if single_form.is_valid():
                     obj = single_form.save(commit=False)
+                    save_delta = single_form.cleaned_data.get("save_delta", False)
+
                     obj.save()
                     single_form.save_m2m()
-                    self.save_related(request, single_form, [], False)
 
-                    # 🔹 Update related ProjectMetrics
                     for metric in obj.project_metrics.all():
-                        if metric.current_value is None:
+                        if not save_delta:
+                            # Case 1: Store inputted value in ProjectMetricData
                             delta_value = obj.value
+                            metric.current_value = round(
+                                (metric.current_value or 0) + delta_value, 2
+                            )
+                            obj.value = round(delta_value, 2)
+
                         else:
-                            delta_value = obj.value - metric.current_value
+                            # Case 2: Store delta value in ProjectMetricData
+                            if metric.current_value is None:
+                                delta_value = obj.value
+                            else:
+                                delta_value = obj.value - metric.current_value
 
-                        # overwrite stored value with delta
-                        obj.value = round(delta_value, 2)
-                        obj.save(update_fields=["value"])
+                            metric.current_value = round(obj.value, 2)
+                            obj.value = round(delta_value, 2)
 
-                        # update the metric itself
-                        metric.current_value = round(obj.value + (metric.current_value or 0), 2)
                         metric.current_value_date = obj.date
                         metric.save(update_fields=["current_value", "current_value_date"])
+                        obj.save(update_fields=["value"])  # persist possibly updated value
 
-                    messages.success(request, "Single ProjectMetricData record added.")
+                    messages.success(
+                        request,
+                        f"ProjectMetricData record added ({'delta' if save_delta else 'raw value'} mode)."
+                    )
                     return redirect("admin:dashboard_projectmetricdata_add")
 
         context = {
