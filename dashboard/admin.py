@@ -245,6 +245,23 @@ class ProjectMetricDataAdmin(admin.ModelAdmin):
                     obj.save()
                     single_form.save_m2m()
                     self.save_related(request, single_form, [], False)
+
+                    # 🔹 Update related ProjectMetrics
+                    for metric in obj.project_metrics.all():
+                        if metric.current_value is None:
+                            delta_value = obj.value
+                        else:
+                            delta_value = obj.value - metric.current_value
+
+                        # overwrite stored value with delta
+                        obj.value = round(delta_value, 2)
+                        obj.save(update_fields=["value"])
+
+                        # update the metric itself
+                        metric.current_value = round(obj.value + (metric.current_value or 0), 2)
+                        metric.current_value_date = obj.date
+                        metric.save(update_fields=["current_value", "current_value_date"])
+
                     messages.success(request, "Single ProjectMetricData record added.")
                     return redirect("admin:dashboard_projectmetricdata_add")
 
