@@ -522,7 +522,7 @@ def read_root():
     }
 )
 def get_projects(db_conn=Depends(get_django_db_connection)):
-    projects = Project.objects.all()
+    projects = Project.objects.all().order_by("name")
     return [
         ProjectSummary(
             name=project.name,
