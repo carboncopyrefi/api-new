@@ -3,6 +3,7 @@ import django, os
 from pydantic import BaseModel, Field
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from django.db.models import Sum, Max, Count
 from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
@@ -257,19 +258,39 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
                 .order_by('month')
             )
 
-            running_total = 0.0
-            last_value = 0.0  # keeps track of last seen value for this metric
+            # Convert QuerySet -> dict { "YYYY-MM": value }
+            raw_month_map = {
+                entry['month'].strftime('%Y-%m'): float(entry['total'] or 0.0)
+                for entry in month_values
+            }
 
-            for entry in month_values:
-                running_total += float(entry['total'] or 0.0)
-                date_str = entry['month'].strftime('%Y-%m')
+            if raw_month_map:
+                # Determine the full month range
+                min_month = min(entry['month'] for entry in month_values)
+                max_month = max(entry['month'] for entry in month_values)
 
-                chart_data_map[date_str]["month"] = date_str
+                # Iterate month-by-month across the full range
+                current = min_month
+                running_total = 0.0
+                last_value = 0.0
 
-                # If there was data for this month, use it; otherwise carry forward the last value
-                if entry['total'] is not None:
-                    last_value = running_total
-                chart_data_map[date_str][agg.name] = last_value
+                while current <= max_month:
+                    date_str = current.strftime('%Y-%m')
+
+                    # Add this month into chart_data_map
+                    chart_data_map[date_str]["month"] = date_str
+
+                    if date_str in raw_month_map:
+                        running_total += raw_month_map[date_str]
+                        last_value = running_total
+                    else:
+                        # no new data -> carry forward last_value
+                        pass
+
+                    chart_data_map[date_str][agg.name] = last_value
+
+                    # advance to next month
+                    current += relativedelta(months=1)
 
         # ---- Pie chart (project breakdown) ----
         pie_chart_data = None
@@ -490,7 +511,10 @@ def get_venture_funding_data() -> VentureFundingResponse:
 
 @app.get("/", summary="Root endpoint")
 def read_root():
-    return {"message": "FastAPI + Django working"}
+    return {
+        "message": "CARBON Copy API. See the documentation at /docs",
+        "docs_url": "/docs"
+    }
 
 
 @app.get(
