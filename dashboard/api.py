@@ -175,7 +175,7 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
     project_name_map = {}
     
     chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
-    chart_data_map = defaultdict(lambda: {"month": None})  # keyed by month-year string
+    chart_data_map = defaultdict(dict)
 
     for agg in agg_qs:
         pm_qs = ProjectMetric.objects.filter(aggregate_metric=agg)
@@ -248,7 +248,11 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
                 project_metric_map[project_id][agg.id] = pm.current_value
 
         # --- Chart Data ---
-        if agg in chart_metrics:
+        # 1. Collect month ranges across all metrics
+        all_months = set()
+        metric_month_maps = {}
+
+        for agg in chart_metrics:
             month_values = (
                 MetricData.objects
                 .filter(project_metrics__aggregate_metric=agg)
@@ -258,39 +262,45 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
                 .order_by('month')
             )
 
-            # Convert QuerySet -> dict { "YYYY-MM": value }
+            # Store per-metric data
             raw_month_map = {
                 entry['month'].strftime('%Y-%m'): float(entry['total'] or 0.0)
                 for entry in month_values
             }
+            metric_month_maps[agg.name] = raw_month_map
 
-            if raw_month_map:
-                # Determine the full month range
-                min_month = min(entry['month'] for entry in month_values)
-                max_month = max(entry['month'] for entry in month_values)
+            # Add these months into global axis
+            for entry in month_values:
+                all_months.add(entry['month'])
 
-                # Iterate month-by-month across the full range
-                current = min_month
-                running_total = 0.0
-                last_value = 0.0
+        # 2. Build full continuous month axis (min → max)
+        if all_months:
+            min_month = min(all_months)
+            max_month = max(all_months)
 
-                while current <= max_month:
-                    date_str = current.strftime('%Y-%m')
+            current = min_month
+            month_axis = []
+            while current <= max_month:
+                month_axis.append(current.strftime('%Y-%m'))
+                current += relativedelta(months=1)
 
-                    # Add this month into chart_data_map
-                    chart_data_map[date_str]["month"] = date_str
+        # 3. Fill data for each metric using running totals
+        for agg in chart_metrics:
+            raw_month_map = metric_month_maps.get(agg.name, {})
+            running_total = 0.0
+            last_value = 0.0
 
-                    if date_str in raw_month_map:
-                        running_total += raw_month_map[date_str]
-                        last_value = running_total
-                    else:
-                        # no new data -> carry forward last_value
-                        pass
+            for date_str in month_axis:
+                chart_data_map[date_str]["month"] = date_str
 
-                    chart_data_map[date_str][agg.name] = last_value
+                if date_str in raw_month_map:
+                    running_total += raw_month_map[date_str]
+                    last_value = running_total
 
-                    # advance to next month
-                    current += relativedelta(months=1)
+                chart_data_map[date_str][agg.name] = last_value
+
+        # 4. Convert chart_data_map to sorted list
+        chart_data = [chart_data_map[m] for m in sorted(chart_data_map)]
 
         # ---- Pie chart (project breakdown) ----
         pie_chart_data = None
