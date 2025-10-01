@@ -19,8 +19,8 @@ django.setup()
 
 from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, AggregateMetricType  # noqa: E402
 
-# app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
-app = FastAPI(title="CARBON Copy API")
+app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
+# app = FastAPI(title="CARBON Copy API")
 
 def get_django_db_connection():
     """
