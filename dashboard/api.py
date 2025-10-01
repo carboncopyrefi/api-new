@@ -23,12 +23,22 @@ app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 # app = FastAPI(title="CARBON Copy API")
 
 def get_django_db_connection():
-    close_old_connections()
+    """ FastAPI dependency to manage Django DB connection lifecycle. """
     conn = connections['default']
+    def safe_is_usable(c):
+        try:
+            return c.is_usable()
+        
+        except Exception: return False
+
     try:
+        if not safe_is_usable(conn):
+            conn.close()
+            conn.connect()
         yield conn
+
     finally:
-        close_old_connections()
+        conn.close()
 
 # -----------------------------
 # Pydantic Models
