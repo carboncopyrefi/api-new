@@ -9,7 +9,7 @@ from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
 from .utils import get_all_baserow_data
 from .security import get_api_key
-from django.db import connections
+from django.db import connections, close_old_connections
 from django.conf import settings
 from django.utils.timezone import make_aware
 
@@ -23,23 +23,12 @@ app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 # app = FastAPI(title="CARBON Copy API")
 
 def get_django_db_connection():
-    """
-    FastAPI dependency to manage Django DB connection lifecycle.
-    """ 
+    close_old_connections()
     conn = connections['default']
-
-    def safe_is_usable(c):
-        try:
-            return c.is_usable()
-        except Exception:
-            return False
     try:
-        if not safe_is_usable(conn):
-            conn.close()
-            conn.connect()
         yield conn
     finally:
-        conn.close()
+        close_old_connections()
 
 # -----------------------------
 # Pydantic Models
