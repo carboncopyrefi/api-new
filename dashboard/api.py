@@ -9,7 +9,7 @@ from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
 from .utils import get_all_baserow_data
 from .security import get_api_key
-from django.db import connections, close_old_connections
+from django.db import connections, transaction
 from django.conf import settings
 from django.utils.timezone import make_aware
 
@@ -373,9 +373,10 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
 # -----------------------------
 def get_overview_data() -> OverviewResponse:
     # Fetch three types
-    investment = get_aggregate_metric_type_db_optimized("investment")
-    grants = get_aggregate_metric_type_db_optimized("grants")
-    loans = get_aggregate_metric_type_db_optimized("lending")
+    with transaction.atomic():
+        investment = get_aggregate_metric_type_db_optimized("investment")
+        grants = get_aggregate_metric_type_db_optimized("grants")
+        loans = get_aggregate_metric_type_db_optimized("lending")
 
     def extract(metric_resp: AggregateMetricTypeResponse) -> OverviewMetric:
         # Use the first metric (assuming each type only has one top-level aggregate)
@@ -555,7 +556,8 @@ def read_root():
     }
 )
 def get_projects(db_conn=Depends(get_django_db_connection)):
-    projects = Project.objects.all().order_by("name")
+    with transaction.atomic():
+        projects = Project.objects.all().order_by("name")
     return [
         ProjectSummary(
             name=project.name,
@@ -677,8 +679,8 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
 )
 def get_aggregate_metric_types(db_conn=Depends(get_django_db_connection)):
     from .models import AggregateMetricType
-
-    types = AggregateMetricType.objects.all().order_by("name")
+    with transaction.atomic():
+        types = AggregateMetricType.objects.all().order_by("name")
     return [
         AggregateMetricTypeList(
             name=t.name,
