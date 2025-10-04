@@ -610,21 +610,23 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
     today = make_aware(naive_latest_date)
 
     try:
-        project = Project.objects.get(baserow_id=baserow_id)
+        with transaction.atomic():
+            project = Project.objects.get(baserow_id=baserow_id)
     except Project.DoesNotExist:
         raise HTTPException(status_code=404, detail="Project not found")
 
     def build_cumulative(metric):
         running_total = 0
         cumulative_data = []
-        for date, value in (
-            MetricData.objects
-            .filter(project_metrics=metric)
-            .order_by("date")
-            .values_list("date", "value")
-        ):
-            running_total += float(value or 0)
-            cumulative_data.append((date, running_total))
+        with transaction.atomic():
+            for date, value in (
+                MetricData.objects
+                .filter(project_metrics=metric)
+                .order_by("date")
+                .values_list("date", "value")
+            ):
+                running_total += float(value or 0)
+                cumulative_data.append((date, running_total))
         return cumulative_data
 
     return [
@@ -698,7 +700,9 @@ def get_aggregate_metric_types(db_conn=Depends(get_django_db_connection)):
     description="Returns the aggregate metrics for the given type slug. The type slug must exist in AggregateMetric.TYPE_CHOICES."
 )
 def aggregate_metric_type_endpoint(type_slug: str, db_conn=Depends(get_django_db_connection)):
-    return get_aggregate_metric_type_db_optimized(type_slug)
+    with transaction.atomic():
+        data = get_aggregate_metric_type_db_optimized(type_slug)
+    return data
 
 @app.get(
     "/overview",
