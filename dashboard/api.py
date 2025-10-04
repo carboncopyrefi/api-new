@@ -40,14 +40,6 @@ def get_django_db_connection():
     finally:
         conn.close()
 
-
-@app.middleware("http")
-async def db_session_middleware(request, call_next):
-    close_old_connections()
-    response = await call_next(request)
-    close_old_connections()
-    return response
-
 # -----------------------------
 # Pydantic Models
 # -----------------------------
