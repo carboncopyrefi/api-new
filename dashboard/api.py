@@ -38,7 +38,6 @@ def get_django_db_connection():
         yield conn
 
     finally:
-        print("test")
         conn.close()
 
 
@@ -46,7 +45,6 @@ def get_django_db_connection():
 async def db_session_middleware(request, call_next):
     close_old_connections()
     response = await call_next(request)
-    print("hello")
     close_old_connections()
     return response
 
