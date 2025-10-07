@@ -12,6 +12,7 @@ from .security import get_api_key
 from django.db import connections, transaction
 from django.conf import settings
 from django.utils.timezone import make_aware
+from .middleware import DjangoDBMiddleware
 
 # Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
@@ -21,24 +22,7 @@ from .models import Project, ProjectMetric, ProjectMetricData as MetricData, Agg
 
 app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 # app = FastAPI(title="CARBON Copy API")
-
-def get_django_db_connection():
-    """ FastAPI dependency to manage Django DB connection lifecycle. """
-    conn = connections['default']
-    def safe_is_usable(c):
-        try:
-            return c.is_usable()
-        
-        except Exception: return False
-
-    try:
-        if not safe_is_usable(conn):
-            conn.close()
-            conn.connect()
-        yield conn
-
-    finally:
-        conn.close()
+app.add_middleware(DjangoDBMiddleware)
 
 # -----------------------------
 # Pydantic Models
@@ -555,7 +539,7 @@ def read_root():
         }
     }
 )
-def get_projects(db_conn=Depends(get_django_db_connection)):
+def get_projects():
     with transaction.atomic():
         projects = Project.objects.all().order_by("name")
     return [
@@ -604,7 +588,7 @@ def get_projects(db_conn=Depends(get_django_db_connection)):
         404: {"description": "Project not found"}
     }
 )
-def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_connection)):
+def get_project_metrics_data(baserow_id: int):
     naive_latest_date = datetime.now()
     settings.TIME_ZONE
     today = make_aware(naive_latest_date)
@@ -679,7 +663,7 @@ def get_project_metrics_data(baserow_id: int, db_conn=Depends(get_django_db_conn
         }
     }
 )
-def get_aggregate_metric_types(db_conn=Depends(get_django_db_connection)):
+def get_aggregate_metric_types():
     from .models import AggregateMetricType
     with transaction.atomic():
         types = AggregateMetricType.objects.all().order_by("name")
@@ -699,7 +683,7 @@ def get_aggregate_metric_types(db_conn=Depends(get_django_db_connection)):
     summary="Get Aggregate Metric Type",
     description="Returns the aggregate metrics for the given type slug. The type slug must exist in AggregateMetric.TYPE_CHOICES."
 )
-def aggregate_metric_type_endpoint(type_slug: str, db_conn=Depends(get_django_db_connection)):
+def aggregate_metric_type_endpoint(type_slug: str):
     with transaction.atomic():
         data = get_aggregate_metric_type_db_optimized(type_slug)
     return data
@@ -709,7 +693,7 @@ def aggregate_metric_type_endpoint(type_slug: str, db_conn=Depends(get_django_db
     response_model=OverviewResponse,
     summary="Overview of Funding Metrics"
 )
-def get_overview(db_conn=Depends(get_django_db_connection)):
+def get_overview():
     return get_overview_data()
 
 @app.get(
@@ -718,7 +702,7 @@ def get_overview(db_conn=Depends(get_django_db_connection)):
     summary="Venture Funding Overview",
     description="Returns total venture funding, deals, charts, project breakdown, and current year deals"
 )
-def venture_funding_endpoint(db_conn=Depends(get_django_db_connection)):
+def venture_funding_endpoint():
     return get_venture_funding_data()
 
 
