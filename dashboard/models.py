@@ -17,6 +17,8 @@ class Project(models.Model):
     name = models.CharField(max_length=255)
     logo_url = models.URLField(blank=True, null=True)
     slug = models.CharField(max_length=100, null=True)
+    impact_json = models.JSONField(null=True, blank=True, help_text="Optional Impact Metrics JSON for this project")
+    last_updated = models.DateTimeField(blank=True, null=True) 
 
     def __str__(self):
         return self.name

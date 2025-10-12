@@ -15,8 +15,8 @@ def get_nested_value(data, key_path):
     return data
 
 
-def get_baserow_impact_data(baserow_id):
-    url = "https://api.baserow.io/api/database/rows/table/171320/" + str(baserow_id) + "/?user_field_names=true&include=Impact Metrics JSON"
+def get_baserow_project_data(baserow_id):
+    url = "https://api.baserow.io/api/database/rows/table/171320/" + str(baserow_id) + "/?user_field_names=true&include=Slug,Name,Logo "
     headers = {
         "Authorization": f"Token {BASEROW_TOKEN}",
         "Content-Type": "application/json",

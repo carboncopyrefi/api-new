@@ -1,119 +1,214 @@
-import requests, base64, binascii, json, os
+import requests, base64, binascii, json, os, time, logging
+from functools import wraps
+from pydantic import BaseModel, Field
+from datetime import datetime, timedelta
 
 from dune_client.client import DuneClient
 
 from .regen_pb2 import QueryBatchesResponse, QuerySupplyResponse
 from .utils import get_nested_value
 
-def get_metric_by_db_id(metrics: list, db_id: int):
-    """
-    Finds the metric dict from a list of metrics that matches the given db_id.
-    Raises ValueError if not found.
-    """
-    metric = next((m for m in metrics if m["db_id"] == db_id), None)
-    if not metric:
-        raise ValueError(f"No metric found with db_id={db_id}")
-    return metric
+logger = logging.getLogger(__name__)
 
-def refresh_dune(impact: dict, db_id: int) -> float:
+class RefreshMetricResponse(BaseModel):
+    db_id: int = Field(..., description="ID of the metric in both DB and Impact JSON")
+    value: float | None = Field(None, description="Refreshed value or None if failed")
+    single: bool = Field(False, description="Whether the metric is single value (i.e., not cumulative)")
+
+def safe_refresh(max_retries=2, delay=2.0):
+    """
+    Decorator to wrap refresh functions with retry logic and error handling.
+    Logs errors and returns None instead of raising.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    value = func(*args, **kwargs)
+
+                    # Validation: allow int, float, dict, list, or any object with __dict__
+                    if value is None:
+                        raise ValueError("Returned None")
+
+                    if not isinstance(value, (int, float, list, dict)) and not hasattr(value, "__dict__"):
+                        raise ValueError(f"Invalid value returned: {type(value)}")
+
+                    return value
+
+                except Exception as e:
+                    logger.warning(
+                        f"[{func.__name__}] attempt {attempt} failed: {e}"
+                    )
+                    if attempt < max_retries:
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            f"[{func.__name__}] failed after {max_retries} attempts: {e}"
+                        )
+                        return None
+        return wrapper
+    return decorator
+
+@safe_refresh(max_retries=3, delay=3)
+def refresh_dune(impact: dict) -> list[RefreshMetricResponse]:
     # Dune initialization
     dune = DuneClient(os.getenv("DUNE_KEY"))
+    results = []
 
-    # Find the metric with matching db_id
-    metric = get_metric_by_db_id(impact["metrics"], db_id)
+    for metric in impact["metrics"]:
+        # Fetch result from Dune
+        query = dune.get_latest_result(
+            metric["query"],
+            max_age_hours=int(metric["max_age"])
+        )
 
-    # Fetch result from Dune
-    query = dune.get_latest_result(
-        metric["query"],
-        max_age_hours=int(metric["max_age"])
-    )
+        # Extract and round value
+        value = round(
+            float(query.result.rows[int(metric["result_index"])][metric["result_key"]]),
+            2
+        )
 
-    # Extract and round value
-    value = round(
-        float(query.result.rows[int(metric["result_index"])][metric["result_key"]]),
-        2
-    )
+        # Apply denominator if present
+        if metric.get("denominator") is not None:
+            value = value / int(metric["denominator"])
 
-    # Apply denominator if present
-    if metric.get("denominator") is not None:
-        value = value / int(metric["denominator"])
+        result = RefreshMetricResponse(
+            db_id=metric["db_id"],
+            value=value
+        )
+        results.append(result)
 
-    return value
+    return results
 
-
-def refresh_client(impact: dict, db_id: int):
-    # Find the metric with matching db_id
-    metric = get_metric_by_db_id(impact["metrics"], db_id)
+@safe_refresh(max_retries=3, delay=3)
+def refresh_client(impact: dict) -> list[RefreshMetricResponse]:
+    results = []
 
     if impact["method"] == "POST":
         post_body = json.loads(json.dumps(impact["body"]))
+        if "start_date" in impact:
+            current_date = datetime.today()
+            difference = current_date - datetime.strptime(impact["start_date"]["date"], "%Y-%m-%d")
+            week_number = (difference.days // 7 + impact["start_date"]["week"]) - 1
+            post_body["week_number"] = int(week_number)
+
         response = requests.post(impact["api"], json=post_body)
-        metric_data = response.json()[impact["result_key"]][impact["result_index"]]
+        if impact["result_index"] is not None and impact["result_key"] is not None:
+            metric_data = response.json()[impact["result_key"]][impact["result_index"]]
+        else:
+            metric_data = response.json()
 
-        value = metric_data[metric["result_key"]]
-        formatted_value = (
-            round(float(value) / impact["global_denominator"], 2)
-            if impact["global_operator"] == "divide"
-            else round(float(value), 2)
-        )
+        list_value = 0
 
-        if metric["operator"] == "multiply":
-            formatted_value = round(formatted_value * metric["denominator"], 2)
-        elif metric["operator"] == "divide":
-            formatted_value = round(formatted_value / metric["denominator"], 2)
+        for metric in impact["metrics"]:
+            if "list_name" in metric:
+                for i in metric_data[metric["list_name"]]:
+                    list_value += float(i[metric["result_key"]])
+                value = list_value
+            else:
+                value = metric_data[metric["result_key"]]
+            formatted_value = (
+                round(float(value) / impact["global_denominator"], 2)
+                if impact["global_operator"] == "divide"
+                else round(float(value), 2)
+            )
 
-        return formatted_value
+            if metric["operator"] == "multiply":
+                formatted_value = round(formatted_value * metric["denominator"], 2)
+            elif metric["operator"] == "divide":
+                formatted_value = round(formatted_value / metric["denominator"], 2)
 
+            result = RefreshMetricResponse(
+                db_id=metric["db_id"],
+                value=formatted_value,
+                single=True if "single" in metric else False
+            )
+
+            results.append(result)
+
+        return results
+
+    # This one was for impactMarket, but the project no longer exists. Needs to be tested in case another project with a "result_key" (i.e., a nested path) is added."
     elif impact["method"] == "GET":
         if impact["result_key"] is not None:
             response = requests.get(impact["api"])
-            value_path = impact["result_key"] + "." + metric["result_key"]
-            value = round(float(get_nested_value(response.json(), value_path)), 2)
-            if metric["denominator"] is not None:
-                value = value / int(metric["denominator"])
-            return value
-        else:
-            list_value = 0
-            api = impact["api"] + metric["query"]
-            response = requests.get(api)
-            value = response.json()
 
-            if isinstance(value, int):
-                if metric["denominator"] is not None:
-                    value = float(value) / int(metric["denominator"])
-            elif isinstance(value, dict):
-                if "list_name" in metric:
-                    for i in value[metric["list_name"]]:
-                        list_value += float(i[metric["result_key"]])
-                    value = list_value
-                else:
-                    value = float(value[metric["result_key"]])
+            for metric in impact["metrics"]:
+                value_path = impact["result_key"] + "." + metric["result_key"]
+                value = round(float(get_nested_value(response.json(), value_path)), 2)
+
                 if metric["denominator"] is not None:
                     value = value / int(metric["denominator"])
 
-            return round(value, 2)
+                result = RefreshMetricResponse(
+                    db_id=metric["db_id"],
+                    value=formatted_value
+                )
 
+                results.append(result)
 
-def refresh_subgraph(impact: dict, db_id: int):
-    metric = get_metric_by_db_id(impact["metrics"], db_id)
+            return results
+        else:
+            list_value = 0
+
+            for metric in impact["metrics"]:
+                api = impact["api"] + metric["query"]
+                response = requests.get(api)
+                value = response.json()
+
+                if isinstance(value, int):
+                    if metric["denominator"] is not None:
+                        value = float(value) / int(metric["denominator"])
+                elif isinstance(value, dict):
+                    if "list_name" in metric:
+                        for i in value[metric["list_name"]]:
+                            list_value += float(i[metric["result_key"]])
+                        value = list_value
+                    else:
+                        value = float(value[metric["result_key"]])
+                    if metric["denominator"] is not None:
+                        value = value / int(metric["denominator"])
+                    
+                
+                result = RefreshMetricResponse(
+                    db_id=metric["db_id"],
+                    value=round(value,2)
+                )
+
+                results.append(result)
+
+            return results
+
+@safe_refresh(max_retries=3, delay=3)
+def refresh_subgraph(impact: dict) -> list[RefreshMetricResponse]:
     cumulative_value = 0
+    results = []
 
-    for q in metric["query"]:
-        response = requests.post(
-            impact["api"].replace("{api_key}", os.getenv("SUBGRAPH_KEY")) + q,
-            json={"query": metric["graphql"]},
+    for metric in impact["metrics"]:
+        for q in metric["query"]:
+            response = requests.post(
+                impact["api"].replace("{api_key}", os.getenv("SUBGRAPH_KEY")) + q,
+                json={"query": metric["graphql"]},
+            )
+            if response.status_code == 200:
+                result = response.json()["data"][impact["result_key"]]
+                for r in result:
+                    if r["key"] == metric["result_key"]:
+                        cumulative_value += float(r["value"])
+        
+        result = RefreshMetricResponse(
+            db_id=metric["db_id"],
+            value=cumulative_value
         )
-        if response.status_code == 200:
-            result = response.json()["data"][impact["result_key"]]
-            for r in result:
-                if r["key"] == metric["result_key"]:
-                    cumulative_value += float(r["value"])
+        results.append(result)
 
-    return cumulative_value
+    return results
 
-def refresh_vebetter(impact: dict, db_id: int):
-    metric = get_metric_by_db_id(impact["metrics"], db_id)
+@safe_refresh(max_retries=3, delay=3)
+def refresh_vebetter(impact: dict) -> list[RefreshMetricResponse]:
     vebetter_api = "https://graph.vet/subgraphs/name/vebetter/dao"
+    results = []
 
     response = requests.post(
             vebetter_api,
@@ -121,27 +216,34 @@ def refresh_vebetter(impact: dict, db_id: int):
         )
     
     if response.status_code == 200:
-        result = response.json()['data']['statsAppSustainabilities'][0]
+        data = response.json()['data']['statsAppSustainabilities'][0]
         value = 0
 
-        if metric['result_key'] in result:
-            if metric['result_index'] is not None:
-                value = float(result[metric['result_key']][metric['result_index']])
+        for metric in impact["metrics"]:
+            if metric['result_key'] in data:
+                if metric['result_index'] is not None:
+                    value = float(data[metric['result_key']][metric['result_index']])
+                else:
+                    value = float(data[metric['result_key']])
             else:
-                value = float(result[metric['result_key']])
-        else:
-            return None
-        
-        if metric['operator'] == "divide":
-            value = value / metric['denominator']
+                return None
+            
+            if metric['operator'] == "divide":
+                value = value / metric['denominator']
 
-        if metric['operator'] == "multiply":
-            value = value * metric['denominator']
+            if metric['operator'] == "multiply":
+                value = value * metric['denominator']
+            
+            result = RefreshMetricResponse(
+                db_id=metric["db_id"],
+                value=value
+            )
+            results.append(result)
 
-    return value
+    return results
 
-def refresh_graphql(impact: dict, db_id: int):
-    metric = get_metric_by_db_id(impact["metrics"], db_id)
+@safe_refresh(max_retries=3, delay=3)
+def refresh_graphql(impact: dict) -> list[RefreshMetricResponse]:
     result_list = []
 
     if impact["query"] and len(impact["query"]) > 0:
@@ -160,17 +262,26 @@ def refresh_graphql(impact: dict, db_id: int):
                 result_list.append(result)
 
         cumulative_value = 0
-        for r in result_list:
-            if metric["result_key"] in r:
-                cumulative_value += float(r[metric["result_key"]])
+        results = []
 
-        if metric["operator"] == "divide":
-            cumulative_value = cumulative_value / metric["denominator"]
+        for metric in impact["metrics"]:
+            for r in result_list:
+                if metric["result_key"] in r:
+                    cumulative_value += float(r[metric["result_key"]])
 
-        if metric["operator"] == "multiply":
-            cumulative_value = cumulative_value * metric["denominator"]
+            if metric["operator"] == "divide":
+                cumulative_value = cumulative_value / metric["denominator"]
 
-        return cumulative_value
+            if metric["operator"] == "multiply":
+                cumulative_value = cumulative_value * metric["denominator"]
+            
+            result = RefreshMetricResponse(
+                db_id=metric["db_id"],
+                value=cumulative_value
+            )
+            results.append(result)
+
+        return results
 
     else:
         response = requests.post(
@@ -190,27 +301,32 @@ def refresh_graphql(impact: dict, db_id: int):
                     result_list.append(result)
 
             value = 0
-            for r in result_list:
-                if metric["result_key"] in r:
-                    value += float(r[metric["result_key"]])
-            if metric["operator"] == "divide":
-                value = value / metric["denominator"]
-            if metric["operator"] == "multiply":
-                value = value * metric["denominator"]
-            return value
+            results = []
 
+            for metric in impact["metrics"]:
+                for r in result_list:
+                    if metric["result_key"] in r:
+                        value += float(r[metric["result_key"]])
+                if metric["operator"] == "divide":
+                    value = value / metric["denominator"]
+                if metric["operator"] == "multiply":
+                    value = value * metric["denominator"]
+                
+                result = RefreshMetricResponse(
+                    db_id=metric["db_id"],
+                    value=value
+                )
+                results.append(result)
+                
+            return results
 
-def refresh_regen(impact: dict, db_id: int):
+@safe_refresh(max_retries=3, delay=3)
+def refresh_regen(impact: dict) -> list[RefreshMetricResponse]:
     def safe_float(value):
         try:
             return float(value)
         except (ValueError, TypeError):
             return 0.0
-
-    # 1. Find the metric with the matching db_id
-    metric = next((m for m in impact["metrics"] if m["db_id"] == db_id), None)
-    if not metric:
-        raise ValueError(f"No metric found for db_id {db_id}")
 
     # 2. Initialize accumulators
     denom_list = []
@@ -283,30 +399,33 @@ def refresh_regen(impact: dict, db_id: int):
             onchain_issued_amount += retired_amount + tradable_amount
 
     # 6. Return only the value for the requested metric
-    if metric["result_key"] == "cumulative_retired_amount":
-        value = cumulative_retired_amount
-    elif metric["result_key"] == "bridged_amount":
-        value = bridged_amount
-    elif metric["result_key"] == "onchain_issued_amount":
-        value = onchain_issued_amount
-    else:
-        value = 0
+    results = []
+    for metric in impact["metrics"]:
+        if metric["result_key"] == "cumulative_retired_amount":
+            value = cumulative_retired_amount
+        elif metric["result_key"] == "bridged_amount":
+            value = bridged_amount
+        elif metric["result_key"] == "onchain_issued_amount":
+            value = onchain_issued_amount
+        else:
+            value = 0
+        
+        result = RefreshMetricResponse(
+            db_id=metric["db_id"],
+            value=round(value,2)
+        )
 
-    return round(value, 2)
+        results.append(result)
 
+    return results
 
-def refresh_near(impact: dict, db_id: int):
+@safe_refresh(max_retries=3, delay=3)
+def refresh_near(impact: dict) -> list[RefreshMetricResponse]:
     def safe_float(value):
         try:
             return float(value)
         except (ValueError, TypeError):
             return 0.0
-
-    # Find the metric with matching db_id
-    metric = next((m for m in impact["metrics"] if m["db_id"] == db_id), None)
-    if not metric:
-        print(f"[DB ID {db_id}] No matching metric found in impact data")
-        return 0.0
 
     # Prepare request body (if defined)
     post_body = json.loads(json.dumps(impact.get("body"))) if impact.get("body") else {}
@@ -320,7 +439,7 @@ def refresh_near(impact: dict, db_id: int):
         )
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"[DB ID {db_id}] Request error: {e}")
+        print(f"[DB ID {metric["db_id"]}] Request error: {e}")
         return 0.0
 
     try:
@@ -328,19 +447,27 @@ def refresh_near(impact: dict, db_id: int):
         decoded_response = "".join([chr(value) for value in result])
         data = json.loads(decoded_response)
     except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
-        print(f"[DB ID {db_id}] Data parsing error: {e}")
+        print(f"[DB ID {metric["db_id"]}] Data parsing error: {e}")
         return 0.0
 
     # Calculate value for the matched metric
     cumulative_value = 0
-    for item in data:
-        value = safe_float(item.get(metric["result_key"]))
-        if metric.get("denominator") is not None:
-            try:
-                value = value / int(metric["denominator"])
-            except (ValueError, TypeError):
-                print(f"[DB ID {db_id}] Invalid denominator: {metric['denominator']}")
-        if metric.get("type") == "cumulative":
-            cumulative_value += value
+    results = []
+    for metric in impact["metrics"]:
+        for item in data:
+            value = safe_float(item.get(metric["result_key"]))
+            if metric.get("denominator") is not None:
+                try:
+                    value = value / int(metric["denominator"])
+                except (ValueError, TypeError):
+                    print(f"[DB ID {metric["db_id"]}] Invalid denominator: {metric['denominator']}")
+            if metric.get("type") == "cumulative":
+                cumulative_value += value
+        
+        result = RefreshMetricResponse(
+            db_id=metric["db_id"],
+            value=round(cumulative_value,2)
+        )
+        results.append(result)
 
-    return round(cumulative_value, 2)
+    return results

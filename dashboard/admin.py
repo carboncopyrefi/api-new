@@ -3,16 +3,30 @@ from urllib.request import urlopen
 from django import forms
 from django.utils.html import format_html
 from django.contrib import admin, messages
+from django.core.exceptions import ValidationError
 from .models import Project, AggregateMetric, ProjectMetric, ProjectMetricData, APIKey
 from . import utils
 from django.utils import timezone
 from django.shortcuts import render, redirect
+from django.utils.safestring import mark_safe
 
 API_URL = "https://api.carboncopy.news/projects"
 
 
 class ProjectSelectForm(forms.ModelForm):
     project_selector = forms.ChoiceField(label="Select Project", required=True)
+    impact_json_text = forms.CharField(
+        widget=forms.Textarea(
+            attrs={
+                "rows": 10,
+                "placeholder": "{\n  \"impact_data\": [...]\n}"
+            }
+        ),
+        required=False,
+        label="Impact JSON (optional)",
+        help_text="Paste the full impact JSON for this project. If provided, this will overwrite any existing JSON."
+    )
+
     _cached_projects = []  # class-level cache
 
     class Meta:
@@ -36,8 +50,37 @@ class ProjectSelectForm(forms.ModelForm):
         choices = [(p["id"], p["name"]) for p in ProjectSelectForm._cached_projects]
         self.fields["project_selector"].choices = choices
 
+        # If editing an existing project, make selector read-only
+        if self.instance and self.instance.pk:
+            current_name = self.instance.name or "(unknown)"
+            current_id = self.instance.baserow_id or ""
+            self.fields["project_selector"].choices = [(current_id, current_name)]
+            self.fields["project_selector"].initial = current_id
+            self.fields["project_selector"].disabled = True
+            self.fields["project_selector"].help_text = "This project is already linked and cannot be changed."
+
+        # If instance already has JSON, pre-fill textarea
+        if self.instance and self.instance.impact_json:
+            self.fields["impact_json_text"].initial = json.dumps(self.instance.impact_json, indent=2)
+
+    def clean_impact_json_text(self):
+        """Validate pasted JSON."""
+        text = self.cleaned_data.get("impact_json_text", "").strip()
+        if not text:
+            return None
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValidationError(f"Invalid JSON: {e.msg}")
+        if not isinstance(parsed, dict):
+            raise ValidationError("Impact JSON must be a JSON object.")
+        return parsed
+
+
     def save(self, commit=True):
         selected_id = self.cleaned_data["project_selector"]
+        impact_json = self.cleaned_data.get("impact_json_text")
 
         # Look up selected project from cached data
         selected_project = next(
@@ -50,6 +93,10 @@ class ProjectSelectForm(forms.ModelForm):
             self.instance.name = selected_project["name"]
             self.instance.logo_url = selected_project.get("logo", "")
             self.instance.slug = selected_project["slug"]
+
+         # Save JSON field if provided
+        if impact_json is not None:
+            self.instance.impact_json = impact_json
 
         return super().save(commit=commit)
 
@@ -87,7 +134,182 @@ class ProjectMetricDataForm(forms.ModelForm):
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
     form = ProjectSelectForm
-    list_display = ("name", "slug", "baserow_id", "logo_url")
+    list_display = ("name", "slug", "baserow_id", "logo_url", "last_updated")
+    actions = ["update_impact_data", "refresh_baserow_data"]
+
+    def refresh_baserow_data(self, request, queryset):
+        """
+        Re-fetches the latest project details (name, slug, logo, etc.)
+        from the Baserow API for selected projects.
+        """
+        updated_count = 0
+        failed_count = 0
+
+        for project in queryset:
+            try:
+                response = utils.get_baserow_project_data(project.baserow_id)
+
+                project.name = response.get("name", project.name)
+                project.slug = response.get("slug", project.slug)
+                project.logo_url = response.get("logo", project.logo_url)
+                project.save(update_fields=["name", "slug", "logo_url", "last_updated"])
+
+                updated_count += 1
+
+            except requests.exceptions.RequestException as e:
+                failed_count += 1
+                self.message_user(
+                    request,
+                    f"Failed to refresh '{project.name}': {e}",
+                    level=messages.ERROR,
+                )
+
+        if updated_count:
+            self.message_user(
+                request,
+                f"Successfully refreshed {updated_count} project(s) from Baserow.",
+                level=messages.SUCCESS,
+            )
+
+        if failed_count and not updated_count:
+            self.message_user(
+                request,
+                f"All refresh attempts failed ({failed_count} projects).",
+                level=messages.ERROR,
+            )
+
+    refresh_baserow_data.short_description = "Refresh project data"
+
+    def update_impact_data(self, request, queryset):
+        """
+        Updates all metrics for each selected project using the stored impact_json.
+        """
+        results = []
+        from . import update_metrics
+        for project in queryset:
+            try:
+                if not project.impact_json:
+                    self.message_user(
+                        request,
+                        f"Project '{project.name}' has no impact_json uploaded.",
+                        level=messages.ERROR,
+                    )
+                    continue
+
+                impact_data = project.impact_json.get("impact_data", [])
+
+                if not isinstance(impact_data, list):
+                    self.message_user(
+                        request,
+                        f"Invalid impact_json format for '{project.name}'",
+                        level=messages.ERROR,
+                    )
+                    continue
+
+                for item in impact_data:
+                    source_value = item.get("source")
+                    if not source_value:
+                        continue
+
+                    func_name = f"refresh_{source_value}"
+                    func = getattr(update_metrics, func_name, None)
+
+                    if not func:
+                        self.message_user(
+                            request,
+                            f"Missing function '{func_name}' for project '{project.name}'",
+                            level=messages.ERROR,
+                        )
+                        continue
+
+                    results.extend(func(item))
+
+                    if results is None:
+                        self.message_user(
+                            request,
+                            f"Skipped '{project.name}' due to failed refresh ({source_value})",
+                            level=messages.WARNING,
+                        )
+                        continue
+
+                metrics = ProjectMetric.objects.filter(projects=project)
+                updated_details = []  # <-- to store per-metric info
+
+                for metric in metrics:
+                    matched_metric = None
+
+                    for result in results:
+                        if not isinstance(result.value, (float, int)):
+                            self.message_user(
+                                request,
+                                f"Invalid return value from {func_name} for '{metric.name}'",
+                                level=messages.ERROR,
+                            )
+                            continue
+
+                        if result.db_id == metric.db_id:
+                            matched_metric = result
+                            break
+
+                        if not matched_metric:
+                            continue
+
+                    now = timezone.now()
+
+                    last_record = (
+                        ProjectMetricData.objects.filter(project_metrics=metric)
+                        .order_by("-date")
+                        .first()
+                    )
+
+                    if result.single == True:
+                        record_value = result.value
+                        metric.current_value = round(result.value + (metric.current_value or 0), 2)
+
+                    else:
+                        record_value = result.value - metric.current_value if last_record else result.value
+                        metric.current_value = round(result.value, 2)
+                        
+                    record = ProjectMetricData.objects.create(
+                        value=round(record_value, 2),
+                        date=now,
+                    )
+                    record.project_metrics.add(metric)
+
+                    metric.current_value_date = now 
+                    metric.save(update_fields=["current_value", "current_value_date"])
+
+                    updated_details.append(
+                            f"{metric.name}: current={round(metric.current_value, 2)}, delta={round(record_value, 2)}"
+                        )
+
+                # Update project last_updated
+                project.last_updated = timezone.now()
+                project.save(update_fields=["last_updated"])
+
+                if updated_details:
+                    details_msg = "<br>".join(updated_details)
+                    self.message_user(
+                        request,
+                        mark_safe(f"Updated metrics for '{project.name}':<br>{details_msg}"),
+                        level=messages.SUCCESS,
+                    )
+                else:
+                    self.message_user(
+                        request,
+                        f"No matching metrics updated for '{project.name}'.",
+                        level=messages.WARNING,
+                    )
+
+            except Exception as e:
+                self.message_user(
+                    request,
+                    f"Error updating project '{project.name}': {e}",
+                    level=messages.ERROR,
+                )
+
+    update_impact_data.short_description = "Fetch impact data"
+
 
 @admin.register(AggregateMetric)
 class AggregateMetricAdmin(admin.ModelAdmin):
@@ -106,114 +328,10 @@ class ProjectMetricAdmin(admin.ModelAdmin):
 
     readonly_fields = ('current_value', 'current_value_date')
 
-    actions = ['update_impact_data']
-
     def get_projects(self, obj):
         return ", ".join(p.name for p in obj.projects.all())
     
     get_projects.short_description = "Projects"
-
-    def update_impact_data(self, request, queryset):
-        from . import update_metrics
-
-        for metric in queryset:
-            for project in metric.projects.all():
-                baserow_id = project.baserow_id
-                db_id = metric.db_id
-
-            try:
-                # 1) Call the function in utils.py
-                result = utils.get_baserow_impact_data(baserow_id)
-
-                # 2) Extract JSON file URL
-                json_url = result["Impact Metrics JSON"][0]["url"]
-
-                # 3) Download JSON
-                response = urlopen(json_url)
-                data = json.loads(response.read())
-
-                if "impact_data" not in data or not isinstance(data["impact_data"], list):
-                    self.message_user(request, f"No impact_data found for {metric.name}", level="error")
-                    continue
-
-                # --- find the correct source block where db_id matches ---
-                matched_item = None
-                matched_metric = None
-                for item in data["impact_data"]:
-                    for m in item.get("metrics", []):
-                        if m.get("db_id") == db_id:
-                            matched_item = item
-                            matched_metric = m.get("db_id")
-                            break
-                    if matched_item:
-                        break
-
-                if not matched_item or not matched_metric:
-                    self.message_user(request, f"No impact_data entry found for db_id={db_id} ({metric.name})", level="error")
-                    continue
-
-                source_value = matched_item.get("source")
-
-                if not source_value:
-                    self.message_user(request, f"No source found for {metric.name}", level="error")
-                    continue
-
-                # 4) Resolve function dynamically
-                func_name = f"refresh_{source_value}"
-                if not hasattr(update_metrics, func_name):
-                    self.message_user(request, f"Function {func_name} not found in update_metrics.py", level="error")
-                    continue
-                func = getattr(update_metrics, func_name)
-
-                # pass both the matched source block and the specific metric config
-                value = func(matched_item, matched_metric)
-                print(type(value))
-                if not isinstance(value, (float, int)):
-                    self.message_user(request, f"Invalid return value from {func_name}", level="error")
-                    continue
-
-                now = timezone.now()
-
-                # Step 5: Get last record for this metric
-                last_record = (
-                    ProjectMetricData.objects
-                    .filter(project_metrics=metric)
-                    .order_by("-date")
-                    .first()
-                )
-
-                if last_record is None:
-                    record_value = value
-                else:
-                    record_value = value - metric.current_value
-
-                # Step 6: Store record
-                record = ProjectMetricData.objects.create(
-                    value=round(record_value, 2),
-                    date=now,
-                )
-                record.project_metrics.add(metric)
-
-                # Step 7: Update ProjectMetric
-                metric.current_value = round(value, 2)
-                metric.current_value_date = now
-                metric.save(update_fields=["current_value", "current_value_date"])
-
-                self.message_user(
-                    request,
-                    f"Updated {metric.name}: stored delta {record_value}, latest value = {value}"
-                )
-
-            except Exception as e:
-                self.message_user(
-                    request,
-                    f"Error updating '{metric.name}': {e}",
-                    level="error"
-                )
-
-
-
-    update_impact_data.short_description = "Update impact data"
 
 @admin.register(ProjectMetricData)
 class ProjectMetricDataAdmin(admin.ModelAdmin):
