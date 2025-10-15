@@ -439,7 +439,6 @@ def refresh_near(impact: dict) -> list[RefreshMetricResponse]:
         )
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"[DB ID {metric["db_id"]}] Request error: {e}")
         return 0.0
 
     try:
@@ -447,7 +446,6 @@ def refresh_near(impact: dict) -> list[RefreshMetricResponse]:
         decoded_response = "".join([chr(value) for value in result])
         data = json.loads(decoded_response)
     except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
-        print(f"[DB ID {metric["db_id"]}] Data parsing error: {e}")
         return 0.0
 
     # Calculate value for the matched metric
@@ -460,7 +458,7 @@ def refresh_near(impact: dict) -> list[RefreshMetricResponse]:
                 try:
                     value = value / int(metric["denominator"])
                 except (ValueError, TypeError):
-                    print(f"[DB ID {metric["db_id"]}] Invalid denominator: {metric['denominator']}")
+                    value = 0.0
             if metric.get("type") == "cumulative":
                 cumulative_value += value
         
