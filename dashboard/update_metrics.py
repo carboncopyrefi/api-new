@@ -149,9 +149,8 @@ def refresh_client(impact: dict) -> list[RefreshMetricResponse]:
 
             return results
         else:
-            list_value = 0
-
             for metric in impact["metrics"]:
+                list_value = 0
                 api = impact["api"] + metric["query"]
                 response = requests.get(api)
                 value = response.json()
