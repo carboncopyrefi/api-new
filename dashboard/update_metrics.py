@@ -129,7 +129,6 @@ def refresh_client(impact: dict) -> list[RefreshMetricResponse]:
 
         return results
 
-    # This one was for impactMarket, but the project no longer exists. Needs to be tested in case another project with a "result_key" (i.e., a nested path) is added."
     elif impact["method"] == "GET":
         if impact["result_key"] is not None:
             response = requests.get(impact["api"])
@@ -143,7 +142,7 @@ def refresh_client(impact: dict) -> list[RefreshMetricResponse]:
 
                 result = RefreshMetricResponse(
                     db_id=metric["db_id"],
-                    value=formatted_value
+                    value=value
                 )
 
                 results.append(result)
