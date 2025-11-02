@@ -251,8 +251,8 @@ class ProjectAdmin(admin.ModelAdmin):
                             matched_metric = result
                             break
 
-                        if not matched_metric:
-                            continue
+                    if not matched_metric:
+                        continue
 
                     now = timezone.now()
 
@@ -262,13 +262,13 @@ class ProjectAdmin(admin.ModelAdmin):
                         .first()
                     )
 
-                    if result.single == True:
-                        record_value = result.value
-                        metric.current_value = round(result.value + (metric.current_value or 0), 2)
+                    if matched_metric.single == True:
+                        record_value = matched_metric.value
+                        metric.current_value = round(matched_metric.value + (metric.current_value or 0), 2)
 
                     else:
-                        record_value = result.value - metric.current_value if last_record else result.value
-                        metric.current_value = round(result.value, 2)
+                        record_value = matched_metric.value - metric.current_value if last_record else matched_metric.value
+                        metric.current_value = round(matched_metric.value, 2)
                         
                     record = ProjectMetricData.objects.create(
                         value=round(record_value, 2),
