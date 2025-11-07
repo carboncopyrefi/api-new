@@ -467,3 +467,29 @@ def refresh_near(impact: dict) -> list[RefreshMetricResponse]:
         results.append(result)
 
     return results
+
+@safe_refresh(max_retries=3, delay=3)
+def refresh_cgt(impact: dict) -> list[RefreshMetricResponse]:
+    results = []
+    pool_list = []
+
+    for network in impact['networks']:
+        url = impact["api"].replace("{network}", network).replace("{pools}", impact["pools"])
+        response = requests.get(url)
+        pool_list.extend(response.json()["data"])
+
+    for metric in impact['metrics']:
+        value = 0.00
+        key = metric["result_key"]
+        for pool in pool_list:
+            value += float(pool["attributes"][key])
+
+        result = RefreshMetricResponse(
+            db_id=metric["db_id"],
+            value=round(value,2)
+        )
+
+        results.append(result)
+           
+        print(results)
+    return results
