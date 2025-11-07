@@ -491,5 +491,4 @@ def refresh_cgt(impact: dict) -> list[RefreshMetricResponse]:
 
         results.append(result)
            
-        print(results)
     return results
