@@ -4,7 +4,7 @@ from django import forms
 from django.utils.html import format_html
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
-from .models import Project, AggregateMetric, ProjectMetric, ProjectMetricData, APIKey
+from .models import Project, AggregateMetric, ProjectMetric, ProjectMetricData, APIKey, SDG
 from . import utils
 from django.utils import timezone
 from django.shortcuts import render, redirect
@@ -313,18 +313,20 @@ class ProjectAdmin(admin.ModelAdmin):
 
 @admin.register(AggregateMetric)
 class AggregateMetricAdmin(admin.ModelAdmin):
-    list_display = ('name', 'unit', 'format', 'type', 'description', 'chart')
+    list_display = ('name', 'unit', 'format', 'type', 'sdg', 'description', 'chart')
     search_fields = ('name', 'unit', 'description')
-    list_filter = ('type', 'format')
+    list_filter = ('type', 'format', 'sdg')
+    autocomplete_fields = ('sdg',)
 
 @admin.register(ProjectMetric)
 class ProjectMetricAdmin(admin.ModelAdmin):
     list_display = (
-        'name', 'get_projects', 'unit', 'category', 
+        'name', 'get_projects', 'unit', 'category', 'sdg',
         'current_value', 'current_value_date'
     )
-    list_filter = ('category', 'format', 'projects', 'aggregate_metric')
+    list_filter = ('category', 'format', 'projects', 'aggregate_metric', 'sdg')
     search_fields = ('name', 'unit', 'db_id', 'description')
+    autocomplete_fields = ('sdg',)
 
     readonly_fields = ('current_value', 'current_value_date')
 
@@ -462,3 +464,8 @@ class APIKeyAdmin(admin.ModelAdmin):
     list_filter = ("active",)
     search_fields = ("name", "key")
     readonly_fields = ("key", "created_at")
+
+@admin.register(SDG)
+class SDGAdmin(admin.ModelAdmin):
+    list_display = ("name", "description", "slug")
+    search_fields = ("name",)

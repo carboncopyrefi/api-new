@@ -32,6 +32,14 @@ class AggregateMetricType(models.Model):
     def __str__(self):
         return self.name
     
+class SDG(models.Model):
+    name = models.CharField(max_length=255)
+    description = models.CharField(max_length=200, null=True, blank=True)
+    slug = models.SlugField(unique=True)
+
+    def __str__(self):
+        return self.name
+    
 class AggregateMetric(models.Model):
     name = models.CharField(max_length=255)
     unit = models.CharField(max_length=50, blank=True, null=True)
@@ -44,6 +52,14 @@ class AggregateMetric(models.Model):
         AggregateMetricType,
         on_delete=models.CASCADE,
         related_name="metrics"
+    )
+
+    sdg = models.ForeignKey(
+        SDG,
+        on_delete=models.CASCADE,
+        related_name="sdgs_aggregate",
+        default=None,
+        null=True
     )
 
     def __str__(self):
@@ -83,6 +99,14 @@ class ProjectMetric(models.Model):
     )
     aggregate_metric = models.ForeignKey(
         'AggregateMetric', on_delete=models.SET_NULL, blank=True, null=True
+    )
+
+    sdg = models.ForeignKey(
+        SDG,
+        on_delete=models.CASCADE,
+        related_name="sdgs_project",
+        default=None,
+        null=True
     )
 
     def __str__(self):
