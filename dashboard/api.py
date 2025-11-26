@@ -18,10 +18,10 @@ from .middleware import DjangoDBMiddleware
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
 django.setup()
 
-from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, AggregateMetricType  # noqa: E402
+from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, SDG, AggregateMetricType  # noqa: E402
 
-app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
-# app = FastAPI(title="CARBON Copy API")
+# app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
+app = FastAPI(title="CARBON Copy API")
 app.add_middleware(DjangoDBMiddleware)
 
 # -----------------------------
@@ -64,6 +64,12 @@ class AggregateMetricItem(BaseModel):
 class AggregateMetricTypeTable(BaseModel):
     headers: List[str]
     rows: List[List[Union[str, float, None]]]
+
+class SDGList(BaseModel):
+    name: str = Field(..., example="Goal #1 - No Poverty")
+    description: Optional[str] = Field(None, example="SDG description")   
+    slug: str = Field(..., example="1-no-poverty")
+    metrics: List[AggregateMetricItem]
 
 class PieChartDataItem(BaseModel):
     name: str  # project name
@@ -130,21 +136,96 @@ def _get_type_display(type_slug: str) -> Optional[str]:
         return AggregateMetricType.objects.get(slug=type_slug).name
     except AggregateMetricType.DoesNotExist:
         return None
+    
+# ---------------------
+# Helper: validate sdg_slug
+# ---------------------
+def _get_sdg_display(sdg_slug: str) -> Optional[str]:
+    """Return the display name (name) for a sdg_slug or None if invalid."""
+    try:
+        return SDG.objects.get(slug=sdg_slug).name
+    except SDG.DoesNotExist:
+        return None
+
+# ---------------------
+# Global aggregate metric value and percent calculator
+# ---------------------
+def _agg_metric_calc(agg: str):
+    pm_qs = ProjectMetric.objects.filter(aggregate_metric=agg)
+
+    total_value_row = pm_qs.aggregate(total=Coalesce(Sum('current_value'), 0.0))
+    total_value = float(total_value_row['total'] or 0.0)
+
+    naive_latest_date = datetime.now()
+    settings.TIME_ZONE
+    latest_date = make_aware(naive_latest_date)
+
+    if latest_date is None:
+        return AggregateMetricItem(
+            name=agg.name,
+            value=total_value,
+            date=None,
+            unit=getattr(agg, 'unit', None),
+            format=getattr(agg, 'format', None),
+            description=getattr(agg, 'description', None),
+            percent_change_7d=None,
+            percent_change_28d=None,
+        ), pm_qs
+
+    target_7d = latest_date - timedelta(days=8)
+    target_28d = latest_date - timedelta(days=28)
+
+    prev7_total = MetricData.objects.filter(
+        project_metrics__aggregate_metric=agg,
+        date__lte=target_7d
+    ).aggregate(total=Coalesce(Sum('value'), 0.0))['total'] or 0.0
+
+    prev28_total = MetricData.objects.filter(
+        project_metrics__aggregate_metric=agg,
+        date__lte=target_28d
+    ).aggregate(total=Coalesce(Sum('value'), 0.0))['total'] or 0.0
+
+    percent_change_7d = None
+    if prev7_total not in (0, None):
+        percent_change_7d = (total_value - prev7_total) / prev7_total * 100.0
+
+    percent_change_28d = None
+    if prev28_total not in (0, None):
+        percent_change_28d = (total_value - prev28_total) / prev28_total * 100.0
+
+    return AggregateMetricItem(
+        name=agg.name,
+        value=total_value,
+        date=latest_date.isoformat(),
+        unit=getattr(agg, 'unit', None),
+        format=getattr(agg, 'format', None),
+        description=getattr(agg, 'description', None),
+        percent_change_7d=percent_change_7d,
+        percent_change_28d=percent_change_28d,
+    ), pm_qs
 
 
 # ---------------------
 # Main Aggregator function
 # ---------------------
-def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTypeResponse:
+def get_aggregate_metric_type_db_optimized(slug: str, slug_type: str) -> AggregateMetricTypeResponse:
     """
     Returns the aggregate metric type with aggregated sums, percent changes,
     and a list of projects and their project metric values for each aggregate metric.
     """
-    type_display = _get_type_display(type_slug)
-    if not type_display:
-        raise HTTPException(status_code=404, detail="Invalid aggregate metric type")
+    if slug_type == "sdg":
+        display = _get_sdg_display(slug)
+        if not display:
+            raise HTTPException(status_code=404, detail="Invalid SDG")
+        
+        agg_qs = AggregateMetric.objects.filter(sdg__slug=slug)
+    
+    else:
+        display = _get_type_display(slug)
+        if not display:
+            raise HTTPException(status_code=404, detail="Invalid aggregate metric type")
 
-    agg_qs = AggregateMetric.objects.filter(type__slug=type_slug)
+        agg_qs = AggregateMetric.objects.filter(type__slug=slug)
     
     metrics_out = []
 
@@ -161,65 +242,10 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
     chart_data_map = defaultdict(dict)
 
     for agg in agg_qs:
-        pm_qs = ProjectMetric.objects.filter(aggregate_metric=agg)
-
-        total_value_row = pm_qs.aggregate(total=Coalesce(Sum('current_value'), 0.0))
-        total_value = float(total_value_row['total'] or 0.0)
-
-        # latest_date_row = pm_qs.aggregate(latest=Max('current_value_date'))
-
-        naive_latest_date = datetime.now()
-        settings.TIME_ZONE
-        latest_date = make_aware(naive_latest_date)
-
-        if latest_date is None:
-            metrics_out.append(
-                AggregateMetricItem(
-                    name=agg.name,
-                    value=total_value,
-                    date=None,
-                    unit=getattr(agg, 'unit', None),
-                    format=getattr(agg, 'format', None),
-                    description=getattr(agg, 'description', None),
-                    percent_change_7d=None,
-                    percent_change_28d=None,
-                )
-            )
-            continue
-
-        target_7d = latest_date - timedelta(days=8)
-        target_28d = latest_date - timedelta(days=28)
-
-        prev7_total = MetricData.objects.filter(
-            project_metrics__aggregate_metric=agg,
-            date__lte=target_7d
-        ).aggregate(total=Coalesce(Sum('value'), 0.0))['total'] or 0.0
-
-        prev28_total = MetricData.objects.filter(
-            project_metrics__aggregate_metric=agg,
-            date__lte=target_28d
-        ).aggregate(total=Coalesce(Sum('value'), 0.0))['total'] or 0.0
-
-        percent_change_7d = None
-        if prev7_total not in (0, None):
-            percent_change_7d = (total_value - prev7_total) / prev7_total * 100.0
-
-        percent_change_28d = None
-        if prev28_total not in (0, None):
-            percent_change_28d = (total_value - prev28_total) / prev28_total * 100.0
-
-        metrics_out.append(
-            AggregateMetricItem(
-                name=agg.name,
-                value=total_value,
-                date=latest_date.isoformat(),
-                unit=getattr(agg, 'unit', None),
-                format=getattr(agg, 'format', None),
-                description=getattr(agg, 'description', None),
-                percent_change_7d=percent_change_7d,
-                percent_change_28d=percent_change_28d,
-            )
-        )
+        
+        # --- Run metric calculations and percent change ---
+        agg_item, pm_qs = _agg_metric_calc(agg)
+        metrics_out.append(agg_item)
 
         # --- Fill project metric mapping ---
         for pm in pm_qs.prefetch_related('projects'):
@@ -292,24 +318,28 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
         pie_metric = agg_qs.filter(pie_chart=True).first()
 
         # And is the TYPE configured for project-level pies?
-        type_obj = AggregateMetricType.objects.only("pie_chart", "name").get(slug=type_slug)
+        if slug_type == "sdg":
+            obj = SDG.objects.only("name").get(slug=slug)
+            pie_chart_items = None
+        else:
+            obj = AggregateMetricType.objects.only("pie_chart", "name").get(slug=slug)
 
-        if pie_metric and type_obj.pie_chart == "project":
-            pie_chart_items = []
-            for project_id, metrics_dict in project_metric_map.items():
-                value = metrics_dict.get(pie_metric.id, 0)
-                if value not in (None, 0):
-                    pie_chart_items.append({
-                        "name": project_name_map[project_id],
-                        "value": float(value),
-                        "project_id": project_id,
-                    })
+            if pie_metric and obj.pie_chart == "project":
+                pie_chart_items = []
+                for project_id, metrics_dict in project_metric_map.items():
+                    value = metrics_dict.get(pie_metric.id, 0)
+                    if value not in (None, 0):
+                        pie_chart_items.append({
+                            "name": project_name_map[project_id],
+                            "value": float(value),
+                            "project_id": project_id,
+                        })
 
-            if pie_chart_items:
-                pie_chart_data = {
-                    "title": pie_metric.name,
-                    "items": pie_chart_items
-                }
+                if pie_chart_items:
+                    pie_chart_data = {
+                        "title": pie_metric.name,
+                        "items": pie_chart_items
+                    }
 
     # Build rows
     rows = []
@@ -343,8 +373,8 @@ def get_aggregate_metric_type_db_optimized(type_slug: str) -> AggregateMetricTyp
     chart_data = sorted(chart_data_map.values(), key=lambda x: x['month'])
 
     return AggregateMetricTypeResponse(
-        type_name=type_display,
-        description=type_obj.description,
+        type_name=display,
+        description=obj.description,
         projects_count=projects_count,
         metrics=metrics_out,
         table=table,
@@ -503,7 +533,7 @@ def get_venture_funding_data() -> VentureFundingResponse:
 # Routes
 # -----------------------------
 
-@app.get("/", summary="Root endpoint")
+@app.get("/", summary="Root endpoint", dependencies=[])
 def read_root():
     return {
         "message": "CARBON Copy API. See the documentation at /docs",
@@ -513,6 +543,7 @@ def read_root():
 
 @app.get(
     "/projects",
+    dependencies=[Depends(get_api_key)],
     response_model=List[ProjectSummary],
     summary="List all projects",
     responses={
@@ -557,6 +588,7 @@ def get_projects():
 
 @app.get(
     "/projects/{baserow_id}/metrics",
+    dependencies=[Depends(get_api_key)],
     response_model=List[ProjectMetricData],
     summary="Get metrics for a specific project",
     responses={
@@ -647,6 +679,7 @@ def get_project_metrics_data(baserow_id: int):
 
 @app.get(
     "/aggregate-metric-types",
+    dependencies=[Depends(get_api_key)],
     response_model=List[AggregateMetricTypeList],
     summary="List all aggregate metric types",
     responses={
@@ -678,18 +711,74 @@ def get_aggregate_metric_types():
     ]
 
 @app.get(
-    "/aggregate-metric-types/{type_slug}",
+    "/aggregate-metric-types/{slug}",
+    dependencies=[Depends(get_api_key)],
     response_model=AggregateMetricTypeResponse,
-    summary="Get Aggregate Metric Type",
-    description="Returns the aggregate metrics for the given type slug. The type slug must exist in AggregateMetric.TYPE_CHOICES."
+    summary="Get aggregate metrics by Type",
+    description="Returns the aggregate metrics for the given type slug. The type slug must exist in Aggregate Metric Type table."
 )
-def aggregate_metric_type_endpoint(type_slug: str):
+def aggregate_metric_type_endpoint(slug: str):
     with transaction.atomic():
-        data = get_aggregate_metric_type_db_optimized(type_slug)
+        data = get_aggregate_metric_type_db_optimized(slug, "type")
+    return data
+
+@app.get(
+    "/sdg",
+    dependencies=[],
+    response_model=List[SDGList],
+    summary="List all SDGs",
+    responses={
+        200: {
+            "description": "List of SDGs with slugs",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {"name": "Goal #1 - No Poverty", "description": "SDG description", "slug": "1-no-poverty"},
+                        {"name": "Goal #2 - Zero Hunger", "description": "SDG description", "slug": "2-zero-hunger"}
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_aggregate_metric_types():
+    sdgs = SDG.objects.all()
+    sdg_out = []
+
+    for sdg in sdgs:
+        agg_qs = AggregateMetric.objects.filter(sdg=sdg)
+
+        metrics_out = []
+        for agg in agg_qs:
+            data = _agg_metric_calc(agg)
+            metrics_out.append(data[0])  # AggregateMetricItem
+
+        sdg_out.append(
+            SDGList(
+                name=sdg.name,
+                description=sdg.description,
+                slug=sdg.slug,
+                metrics=metrics_out,
+            )
+        )
+
+    return sdg_out
+
+@app.get(
+    "/sdg/{slug}",
+    dependencies=[],
+    response_model=AggregateMetricTypeResponse,
+    summary="Get aggregate metric data by SDG",
+    description="Returns the aggregate metrics for the given SDG slug. The SDG slug must exist in the SDG table."
+)
+def aggregate_metric_type_endpoint(slug: str):
+    with transaction.atomic():
+        data = get_aggregate_metric_type_db_optimized(slug, "sdg")
     return data
 
 @app.get(
     "/overview",
+    dependencies=[Depends(get_api_key)],
     response_model=OverviewResponse,
     summary="Overview of Funding Metrics"
 )
@@ -698,6 +787,7 @@ def get_overview():
 
 @app.get(
     "/venture-funding",
+    dependencies=[Depends(get_api_key)],
     response_model=VentureFundingResponse,
     summary="Venture Funding Overview",
     description="Returns total venture funding, deals, charts, project breakdown, and current year deals"
@@ -706,7 +796,7 @@ def venture_funding_endpoint():
     return get_venture_funding_data()
 
 
-@app.get("/link-preview")
+@app.get("/link-preview", dependencies=[Depends(get_api_key)])
 async def link_preview(url: str):
     import requests
     from bs4 import BeautifulSoup

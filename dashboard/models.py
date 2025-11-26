@@ -51,7 +51,9 @@ class AggregateMetric(models.Model):
     type = models.ForeignKey(
         AggregateMetricType,
         on_delete=models.CASCADE,
-        related_name="metrics"
+        related_name="metrics",
+        null=True,
+        blank=True
     )
 
     sdg = models.ForeignKey(
@@ -59,7 +61,8 @@ class AggregateMetric(models.Model):
         on_delete=models.CASCADE,
         related_name="sdgs_aggregate",
         default=None,
-        null=True
+        null=True,
+        blank=True
     )
 
     def __str__(self):
