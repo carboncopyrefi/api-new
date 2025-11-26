@@ -388,9 +388,9 @@ def get_aggregate_metric_type_db_optimized(slug: str, slug_type: str) -> Aggrega
 def get_overview_data() -> OverviewResponse:
     # Fetch three types
     with transaction.atomic():
-        investment = get_aggregate_metric_type_db_optimized("investment")
-        grants = get_aggregate_metric_type_db_optimized("grants")
-        loans = get_aggregate_metric_type_db_optimized("lending")
+        investment = get_aggregate_metric_type_db_optimized("investment", "type")
+        grants = get_aggregate_metric_type_db_optimized("grants", "type")
+        loans = get_aggregate_metric_type_db_optimized("lending", "type")
 
     def extract(metric_resp: AggregateMetricTypeResponse) -> OverviewMetric:
         # Use the first metric (assuming each type only has one top-level aggregate)
@@ -778,7 +778,6 @@ def aggregate_metric_type_endpoint(slug: str):
 
 @app.get(
     "/overview",
-    dependencies=[Depends(get_api_key)],
     response_model=OverviewResponse,
     summary="Overview of Funding Metrics"
 )
