@@ -46,6 +46,7 @@ class AggregateMetric(models.Model):
     format = models.CharField(max_length=10, choices=format_choices)
     description = models.CharField(max_length=500)
     chart = models.BooleanField(default=False)
+    sdg_chart = models.BooleanField(default=False)
     pie_chart = models.BooleanField(default=False)
 
     type = models.ForeignKey(

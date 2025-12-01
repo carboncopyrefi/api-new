@@ -238,7 +238,10 @@ def get_aggregate_metric_type_db_optimized(slug: str, slug_type: str) -> Aggrega
     project_metric_map = {}
     project_name_map = {}
     
-    chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
+    if slug_type == "sdg":
+        chart_metrics = agg_qs.filter(sdg_chart=True)  # only metrics that should have SDG charts
+    else:
+        chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
     chart_data_map = defaultdict(dict)
 
     for agg in agg_qs:
