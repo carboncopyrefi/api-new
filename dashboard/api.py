@@ -778,6 +778,7 @@ def aggregate_metric_type_endpoint(slug: str):
 
 @app.get(
     "/overview",
+    dependencies=[Depends(get_api_key)],
     response_model=OverviewResponse,
     summary="Overview of Funding Metrics"
 )
