@@ -9,6 +9,9 @@ from . import utils
 from django.utils import timezone
 from django.shortcuts import render, redirect
 from django.utils.safestring import mark_safe
+from django.http import HttpRequest
+from .services.project_json import generate_projects_json
+from django.urls import path
 
 API_URL = "https://api.carboncopy.news/projects"
 
@@ -310,6 +313,37 @@ class ProjectAdmin(admin.ModelAdmin):
 
     update_impact_data.short_description = "Fetch impact data"
 
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "generate-projects-json/",
+                self.admin_site.admin_view(self.generate_projects_json_view),
+                name="generate-projects-json",
+            ),
+        ]
+        return custom_urls + urls
+    
+    def generate_projects_json_view(self, request):
+        try:
+            path = generate_projects_json()
+            self.message_user(
+                request,
+                f"projects.json generated successfully at {path}",
+                level=messages.SUCCESS,
+            )
+        except Exception as e:
+            self.message_user(
+                request,
+                f"Failed to generate projects.json: {e}",
+                level=messages.ERROR,
+            )
+        return redirect("..")
+    
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context["generate_json_button"] = True
+        return super().changelist_view(request, extra_context)
 
 @admin.register(AggregateMetric)
 class AggregateMetricAdmin(admin.ModelAdmin):

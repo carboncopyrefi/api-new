@@ -1,0 +1,121 @@
+from pydantic import BaseModel, Field
+from typing import List, Optional, Union
+from datetime import datetime
+
+# -----------------------------
+# Pydantic Models
+# -----------------------------
+class ImpactProjectSummary(BaseModel):
+    """Summary information for a project."""
+    name: str = Field(..., example="Solar Energy Initiative")
+    logo_url: Optional[str] = Field(None, example="https://example.com/logo.png")
+    metrics: List[str] = Field(..., example=["Installed Capacity", "CO2 Savings"])
+    slug: Optional[str] = Field(None, example="solar-energy-initiative")
+
+class ProjectSummary(BaseModel):
+    id: int = Field(..., description="Unique identifier for the project")
+    slug: str = Field(..., description="URL-friendly slug for the project")
+    name: str = Field(..., description="Name of the project")
+    logo: str = Field(..., description="URL to the project's logo image")
+    description: str = Field(..., description="One-sentence description of the project")
+    location: Optional[str] = Field(None, description="Location of the project")
+    karma_slug: Optional[str] = Field(None, description="Karma slug for the project")
+    sdg: Optional[List] = Field(None, description="List of SDGs associated with the project")
+    categories: Optional[List] = Field(None, description="List of categories for the project")
+    links: Optional[List] = Field(None, description="List of links associated with the project")
+    founders: Optional[List] = Field(None, description="List of founders for the project")
+    coverage: Optional[List] = Field(None, description="List of coverage articles related to the project")
+    protocol: Optional[List] = Field(None, description="Protocol(s) used by the project")
+    
+class ProjectMetricData(BaseModel):
+    """Detailed information about a project metric."""
+    name: str = Field(..., example="Installed Capacity")
+    current_value: Optional[float] = Field(None, example=25.4)
+    current_value_date: Optional[datetime] = Field(None, example="2025-08-01T14:30:00Z")
+    unit: Optional[str] = Field(None, example="MW")
+    format: Optional[str] = Field(None, description="Display format for the metric value", example="number")
+    description: Optional[str] = Field(None, example="Total installed renewable energy capacity in megawatts")
+    percent_change_7d: Optional[float] = None
+    percent_change_28d: Optional[float] = None
+
+class AggregateMetricTypeList(BaseModel):
+    name: str = Field(..., example="Total Installed Capacity")
+    description: Optional[str] = Field(None, example="Sum of installed capacity across all projects")   
+    slug: str = Field(..., example="total-installed-capacity")
+    pie_chart: str = Field(..., example="Project", description="Pie chart grouping for this metric type")
+
+class AggregateMetricItem(BaseModel):
+    name: str
+    value: float = Field(..., description="Sum of current_value across project metrics")
+    date: Optional[str] = Field(None, description="ISO timestamp of latest underlying metric date")
+    unit: Optional[str] = None
+    format: Optional[str] = None
+    description: Optional[str] = None
+    percent_change_7d: Optional[float] = Field(None, description="Percent change vs ~7 days ago")
+    percent_change_28d: Optional[float] = Field(None, description="Percent change vs ~28 days ago")
+
+class AggregateMetricTypeTable(BaseModel):
+    headers: List[str]
+    rows: List[List[Union[str, float, None]]]
+
+class SDGList(BaseModel):
+    name: str = Field(..., example="Goal #1 - No Poverty")
+    description: Optional[str] = Field(None, example="SDG description")   
+    slug: str = Field(..., example="1-no-poverty")
+    metrics: List[AggregateMetricItem]
+
+class PieChartDataItem(BaseModel):
+    name: str  # project name
+    value: float  # sum of metric values for this project
+    project_id: Optional[int] = None  # optional, for linking on frontend
+
+class PieChartData(BaseModel):
+    title: str
+    items: List[PieChartDataItem]
+
+class AggregateMetricTypeResponse(BaseModel):
+    type_name: str
+    description: Optional[str] = None
+    metrics: List[AggregateMetricItem]
+    table: AggregateMetricTypeTable
+    projects_count: int = Field(..., description="Number of distinct projects contributing to this metric type")
+    charts: Optional[List[dict]] = Field(None, description="Chart data for Recharts visualization")
+    pie_chart: Optional[PieChartData] = Field(
+        None,
+        description="Pie chart breakdown for metrics flagged with pie_chart=True"
+    )
+
+class OverviewMetric(BaseModel):
+    current: float
+    change7d: Optional[float] = None
+    change28d: Optional[float] = None
+
+class OverviewResponse(BaseModel):
+    investment: OverviewMetric
+    grants: OverviewMetric
+    loans: OverviewMetric
+    total: OverviewMetric
+    timeseries: List[dict]
+
+class VentureFundingMetrics(BaseModel):
+    total_funding: float
+    total_deals: int
+
+class VentureFundingChartPoint(BaseModel):
+    x: str  # month-year
+    y: float
+
+class VentureFundingProject(BaseModel):
+    name: str
+    total_funding: float
+    deal_count: int
+
+class VentureFundingDeal(BaseModel):
+    project: str
+    amount: float
+
+class VentureFundingResponse(BaseModel):
+    metrics: VentureFundingMetrics
+    charts: dict  # {"funding_by_month": [...], "deals_by_month": [...]}
+    projects: List[VentureFundingProject]
+    current_year_deals: List[VentureFundingDeal]

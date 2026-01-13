@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
-import django, os
-from pydantic import BaseModel, Field
+import django, os, json
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
@@ -13,6 +12,22 @@ from django.db import connections, transaction
 from django.conf import settings
 from django.utils.timezone import make_aware
 from .middleware import DjangoDBMiddleware
+from .schemas import (
+    ImpactProjectSummary,
+    ProjectSummary,
+    ProjectMetricData,
+    AggregateMetricTypeList,
+    AggregateMetricItem,
+    AggregateMetricTypeTable,
+    SDGList,
+    AggregateMetricTypeResponse,
+    OverviewResponse,
+    OverviewMetric,
+    VentureFundingResponse,
+    VentureFundingMetrics,
+    VentureFundingProject,
+    VentureFundingDeal,
+    )
 
 # Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
@@ -24,108 +39,7 @@ from .models import Project, ProjectMetric, ProjectMetricData as MetricData, Agg
 app = FastAPI(title="CARBON Copy API")
 app.add_middleware(DjangoDBMiddleware)
 
-# -----------------------------
-# Pydantic Models
-# -----------------------------
-class ProjectSummary(BaseModel):
-    """Summary information for a project."""
-    name: str = Field(..., example="Solar Energy Initiative")
-    logo_url: Optional[str] = Field(None, example="https://example.com/logo.png")
-    metrics: List[str] = Field(..., example=["Installed Capacity", "CO2 Savings"])
-    slug: Optional[str] = Field(None, example="solar-energy-initiative")
 
-class ProjectMetricData(BaseModel):
-    """Detailed information about a project metric."""
-    name: str = Field(..., example="Installed Capacity")
-    current_value: Optional[float] = Field(None, example=25.4)
-    current_value_date: Optional[datetime] = Field(None, example="2025-08-01T14:30:00Z")
-    unit: Optional[str] = Field(None, example="MW")
-    format: Optional[str] = Field(None, description="Display format for the metric value", example="number")
-    description: Optional[str] = Field(None, example="Total installed renewable energy capacity in megawatts")
-    percent_change_7d: Optional[float] = None
-    percent_change_28d: Optional[float] = None
-
-class AggregateMetricTypeList(BaseModel):
-    name: str = Field(..., example="Total Installed Capacity")
-    description: Optional[str] = Field(None, example="Sum of installed capacity across all projects")   
-    slug: str = Field(..., example="total-installed-capacity")
-    pie_chart: str = Field(..., example="Project", description="Pie chart grouping for this metric type")
-
-class AggregateMetricItem(BaseModel):
-    name: str
-    value: float = Field(..., description="Sum of current_value across project metrics")
-    date: Optional[str] = Field(None, description="ISO timestamp of latest underlying metric date")
-    unit: Optional[str] = None
-    format: Optional[str] = None
-    description: Optional[str] = None
-    percent_change_7d: Optional[float] = Field(None, description="Percent change vs ~7 days ago")
-    percent_change_28d: Optional[float] = Field(None, description="Percent change vs ~28 days ago")
-
-class AggregateMetricTypeTable(BaseModel):
-    headers: List[str]
-    rows: List[List[Union[str, float, None]]]
-
-class SDGList(BaseModel):
-    name: str = Field(..., example="Goal #1 - No Poverty")
-    description: Optional[str] = Field(None, example="SDG description")   
-    slug: str = Field(..., example="1-no-poverty")
-    metrics: List[AggregateMetricItem]
-
-class PieChartDataItem(BaseModel):
-    name: str  # project name
-    value: float  # sum of metric values for this project
-    project_id: Optional[int] = None  # optional, for linking on frontend
-
-class PieChartData(BaseModel):
-    title: str
-    items: List[PieChartDataItem]
-
-class AggregateMetricTypeResponse(BaseModel):
-    type_name: str
-    description: Optional[str] = None
-    metrics: List[AggregateMetricItem]
-    table: AggregateMetricTypeTable
-    projects_count: int = Field(..., description="Number of distinct projects contributing to this metric type")
-    charts: Optional[List[dict]] = Field(None, description="Chart data for Recharts visualization")
-    pie_chart: Optional[PieChartData] = Field(
-        None,
-        description="Pie chart breakdown for metrics flagged with pie_chart=True"
-    )
-
-class OverviewMetric(BaseModel):
-    current: float
-    change7d: Optional[float] = None
-    change28d: Optional[float] = None
-
-class OverviewResponse(BaseModel):
-    investment: OverviewMetric
-    grants: OverviewMetric
-    loans: OverviewMetric
-    total: OverviewMetric
-    timeseries: List[dict]
-
-class VentureFundingMetrics(BaseModel):
-    total_funding: float
-    total_deals: int
-
-class VentureFundingChartPoint(BaseModel):
-    x: str  # month-year
-    y: float
-
-class VentureFundingProject(BaseModel):
-    name: str
-    total_funding: float
-    deal_count: int
-
-class VentureFundingDeal(BaseModel):
-    project: str
-    amount: float
-
-class VentureFundingResponse(BaseModel):
-    metrics: VentureFundingMetrics
-    charts: dict  # {"funding_by_month": [...], "deals_by_month": [...]}
-    projects: List[VentureFundingProject]
-    current_year_deals: List[VentureFundingDeal]
 
 # ---------------------
 # Helper: validate type_slug
@@ -474,7 +388,7 @@ def get_venture_funding_data() -> VentureFundingResponse:
         f"&filter__field_2209786__single_select_is_any_of=1686865,1688192"
     )
 
-    records = get_all_baserow_data("306630", params)
+    records = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY_FUNDRAISING"), params)
 
     total_funding = 0
     total_deals = len(records)
@@ -545,10 +459,10 @@ def read_root():
 
 
 @app.get(
-    "/projects",
+    "/impact/projects",
     dependencies=[Depends(get_api_key)],
-    response_model=List[ProjectSummary],
-    summary="List all projects",
+    response_model=List[ImpactProjectSummary],
+    summary="List all projects with data integrated to CARBON Copy",
     responses={
         200: {
             "description": "List of projects with basic info",
@@ -573,11 +487,11 @@ def read_root():
         }
     }
 )
-def get_projects():
+def get_impact_projects():
     with transaction.atomic():
         projects = Project.objects.all().order_by("name")
     return [
-        ProjectSummary(
+        ImpactProjectSummary(
             name=project.name,
             logo_url=project.logo_url,
             metrics=list(
@@ -587,6 +501,127 @@ def get_projects():
         )
         for project in projects
     ]
+
+@app.get(
+    "/projects",
+    dependencies=[Depends(get_api_key)],
+    response_model=List[ProjectSummary],
+    summary="List all projects in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "List of projects in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "name": "Solar Energy Initiative",
+                            "description": "Solar Energy Initiative description",
+                            "location": "India",
+                            "logo": "https://example.com/logo.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "solar-energy-initiative",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        },
+                        {
+                            "id": 2,
+                            "name": "Wind Farm Alpha",
+                            "description": "Wind Farm Alpha description",
+                            "location": "USA",
+                            "logo": "https://example.com/windfarm.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "wind-farm-alpha",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_projects():
+    p_list = []
+    file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
+    with open(file_path, "r") as _file:
+        data = json.load(_file)
+    
+    for p in data:
+        project = ProjectSummary(
+            id=p["id"],
+            slug=p["slug"],
+            name=p["name"],
+            logo=p["logo"],
+            description=p["description"],
+            location=p["location"],
+            karma_slug=p["karma_slug"],
+            sdg=p.get("sdg", []),
+            categories=p.get("categories", []),
+            links=p.get("links", []),
+            protocol=p.get("protocol", []),
+            founders=p.get("founders", []),
+            coverage=p.get("coverage", []),
+        )
+
+        p_list.append(vars(project))
+            
+    sorted_p_list = sorted(p_list, key=lambda x:x['name'].lower())
+
+    return sorted_p_list
+
+@app.get(
+    "/projects/{project_slug}",
+    dependencies=[Depends(get_api_key)],
+    response_model=ProjectSummary,
+    summary="Details for a project in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "Details for a project in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "name": "Solar Energy Initiative",
+                            "description": "Solar Energy Initiative description",
+                            "location": "India",
+                            "logo": "https://example.com/logo.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "solar-energy-initiative",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_projects(project_slug: str):
+    p_list = []
+    file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
+    with open(file_path, "r") as _file:
+        data = json.load(_file)
+
+    result = next((item for item in data if item["slug"] == project_slug), None)
+    if not result:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return result
 
 
 @app.get(

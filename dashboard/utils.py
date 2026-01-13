@@ -6,6 +6,22 @@ from .models import ProjectMetric
 BASEROW_API = "https://api.baserow.io/api/database/rows/table/"
 BASEROW_TOKEN = os.getenv("BASEROW_API_KEY")
 
+
+class CSVUploadForm(forms.Form):
+    csv_file = forms.FileField(label="CSV file")
+    project_metric = forms.ModelChoiceField(
+        queryset=ProjectMetric.objects.all(),
+        required=True,
+        label="Metric"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Label: "Metric name (Project name)"
+        self.fields["project_metric"].label_from_instance = (
+            lambda obj: f"{obj.name} ({', '.join(p.name for p in obj.projects.all())})"
+        )
+
 def get_nested_value(data, key_path):
     keys = key_path.split(".")  # Split the key path string by dots
     for key in keys:
@@ -52,17 +68,26 @@ def get_all_baserow_data(table_id: str, params: str) -> list[dict]:
 
     return all_results
 
-class CSVUploadForm(forms.Form):
-    csv_file = forms.FileField(label="CSV file")
-    project_metric = forms.ModelChoiceField(
-        queryset=ProjectMetric.objects.all(),
-        required=True,
-        label="Metric"
-    )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Label: "Metric name (Project name)"
-        self.fields["project_metric"].label_from_instance = (
-            lambda obj: f"{obj.name} ({', '.join(p.name for p in obj.projects.all())})"
-        )
+def contact_icon(contact):
+    icons = {
+        "website": "globe",
+        "x": "twitter-x",
+        "facebook": "facebook",
+        "linkedin": "linkedin",
+        "medium": "medium",
+        "instagram": "instagram",
+        "tiktok": "tiktok",
+        "discord": "discord",
+        "github": "github",
+        "whitepaper": "file-text-fill",
+        "blog": "pencil-square",
+        "podcast": "broadcast-pin",
+        "telegram": "telegram",
+        "youtube": "youtube",
+        "dao": "bounding-box-circles",
+    }
+    
+    if contact in icons.keys():
+        icon = icons[contact]
+    
+    return icon
