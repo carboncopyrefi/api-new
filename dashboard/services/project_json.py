@@ -103,7 +103,7 @@ def generate_projects_json() -> str:
         for p in result.get("Protocol", []):
             protocol_list.append(p["value"])
 
-        project = schemas.Project(
+        project = schemas.ProjectSummary(
             id = result["id"],
             slug = result["Slug"],
             name = company_name,
