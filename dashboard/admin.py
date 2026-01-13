@@ -1,4 +1,4 @@
-import requests, json, csv
+import requests, json, csv, os
 from urllib.request import urlopen
 from django import forms
 from django.utils.html import format_html
@@ -13,7 +13,8 @@ from django.http import HttpRequest
 from .services.project_json import generate_projects_json
 from django.urls import path
 
-API_URL = "https://api.carboncopy.news/projects"
+API_URL = os.getenv('CC_API_URL')
+API_KEY = os.getenv('CC_API_KEY')
 
 
 class ProjectSelectForm(forms.ModelForm):
@@ -42,9 +43,10 @@ class ProjectSelectForm(forms.ModelForm):
         # Load and cache projects if not already cached
         if not ProjectSelectForm._cached_projects:
             try:
-                response = requests.get(API_URL, timeout=5)
+                response = requests.get(API_URL, timeout=5, headers={"X-API-Key": API_KEY})
                 response.raise_for_status()
-                ProjectSelectForm._cached_projects = response.json().get("projects", [])
+                print(response.json())
+                ProjectSelectForm._cached_projects = response.json()
             except Exception as e:
                 ProjectSelectForm._cached_projects = []
                 self.fields["project_selector"].help_text = f"Error loading projects: {e}"
