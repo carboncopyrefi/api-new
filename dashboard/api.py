@@ -1,12 +1,20 @@
 from fastapi import FastAPI, HTTPException, Depends
-import django, os, json
+import django, os, json, requests, feedparser, re, markdown
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.db.models import Sum, Max, Count
 from django.db.models.functions import Coalesce, TruncMonth
 from collections import defaultdict
-from .utils import get_all_baserow_data
+from .utils import (
+    get_all_baserow_data,
+    parse_datetime,
+    get_giveth_data,
+    calculate_dict_sums,
+    get_coingeckoterminal_data,
+    get_coingecko_data,
+    get_karma_gap_data
+)
 from .security import get_api_key
 from django.db import connections, transaction
 from django.conf import settings
@@ -15,6 +23,10 @@ from .middleware import DjangoDBMiddleware
 from .schemas import (
     ImpactProjectSummary,
     ProjectSummary,
+    Article,
+    Token,
+    Activity,
+    NewsItem,
     ProjectMetricData,
     AggregateMetricTypeList,
     AggregateMetricItem,
@@ -447,6 +459,285 @@ def get_venture_funding_data() -> VentureFundingResponse:
     )
 
 # -----------------------------
+# Project dynamic content function
+# -----------------------------
+
+def dynamic_project_content(slug):
+    content = {}
+    
+    params = "filter__field_1248804__equal=" + slug
+    try:
+        data = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY"), params)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Error getting project details from Baserow")
+    
+    if len(data) < 1:
+        raise HTTPException(status_code=404, detail="Project not found")
+    else:
+        result = data[0]
+        company_id = str(result['id'])
+        company_name = result['Name']
+
+    try:
+        # RSS feed content
+        generator = "" 
+
+        if result['Content feed'] == "":
+            content_list = None        
+        else:
+            content_feed_url = str(result['Content feed'])
+            article_list = []
+            content_list = []
+            mainImage = "" 
+
+            if "paragraph" in content_feed_url:
+                r = requests.get(content_feed_url)
+                f = feedparser.parse(r.text)
+            else:
+                f = feedparser.parse(content_feed_url)
+                
+            if hasattr(f.feed,'generator'): 
+                if f.feed['generator'] == 'Medium':
+                    generator = 'Medium'
+            else:
+                generator = None
+
+            for article in f.entries[0:3]:
+                if hasattr(f.feed, 'image'):
+                    mainImage = f.feed['image']['href']
+                link = ""
+                date = parse_datetime(article.published)
+                formatted_date = date.strftime(os.getenv("DATE_FORMAT"))
+                if generator == 'Medium':
+                    match = re.search(r'<img[^>]+src="([^">]+)"', article.content[0]['value'])
+                    mainImage = match.group(1)
+                if hasattr(article, 'media_content'):
+                    mainImage = article.media_content[0]['url']
+                if hasattr(article,'image'):
+                    mainImage = article.image['href']
+                if hasattr(article, 'links'):
+                    for link in article.links:
+                        if link.type == "image/jpg" or link.type == "image/jpeg":
+                            mainImage = link.href
+                        if link.type == 'audio/mpeg':
+                            link = link.href
+                        else:
+                            link = article.link
+                            continue
+                else:
+                    continue
+
+                a = Article(
+                    title=article.title,
+                    url=link,
+                    mainImage=mainImage,
+                    publication=None,
+                    date=formatted_date
+                )
+                article_list.append(a)
+
+            for item in article_list:
+                item_dict = vars(item)
+                content_list.append(item_dict)
+        content["content"] = content_list
+    except Exception as e:
+        content["content"] = None
+
+    # Get data from News table
+    n_list = []
+    news_params = "order_by=-Created on&filter__field_1156934__link_row_has=" + company_id + "&filter__field_1169565__boolean=true"
+    try:
+        news = get_all_baserow_data(
+            os.getenv("BASEROW_TABLE_COMPANY_NEWS"),
+            news_params
+        )
+        for n in news:
+            published_time = datetime.strptime(n['Created on'], "%Y-%m-%dT%H:%M:%S.%fZ")
+            formatted_time = published_time.strftime(os.getenv("DATE_FORMAT"))
+            unix_time = int(published_time.timestamp())
+            news_item = NewsItem(
+                headline=n['Headline'],
+                url=n['Link'],
+                date=formatted_time,
+                sort_date= unix_time,
+            )
+            n_list.append(news_item)
+
+        # sorted_n_list = sorted(n_list, key=lambda d:d['sort_date'], reverse=True)
+        content["news"] = n_list
+
+    except Exception as e:
+        content["news"] = None
+
+    # Get data from CompanyFundraising table - take advantage of row link here
+    try:
+        fundraising_params = "filter__field_2209789__link_row_has=" + company_id
+        fundraising_data = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY_FUNDRAISING"), fundraising_params)
+
+        fundraising_dict = {}
+        fundraising_list = []
+
+        for entry in fundraising_data:
+            if entry['Project ID'] is None or len(entry['Project ID']) < 1:
+                amount = float(entry["Amount"])
+                formatted_amount = '{:,.2f}'.format(amount)
+
+                if entry['Round'] is None:
+                    fundraising_round = ""
+                else:
+                    fundraising_round = entry['Round']['value']
+
+                fundraising_dict = {"funding_type": entry['Type']['value'], "round": fundraising_round, "amount": formatted_amount, "date": entry["Date"], "year": entry["Date"].split('-')[0], "url": entry["Link"]}
+                fundraising_list.append(fundraising_dict) 
+
+            # Get Giveth data
+            elif entry['Project ID'] is not None and entry['Type']['value'] == "Giveth":          
+                giveth_data = get_giveth_data(entry['Project ID'])                
+                fundraising_list.append(giveth_data)
+            else:
+                pass
+        
+        fundraising_sums = calculate_dict_sums(fundraising_list)
+        content["fundraising"] = fundraising_sums
+    except Exception as e:
+        content["fundraising"] = None
+
+    # Token data
+    try:
+        token_list = []
+
+        if result['Token'] is None or len(result['Token']) < 1:
+            token = None
+        else:
+            token_id = result['Token']
+
+            if re.search(r'^[^:]+:[^:]+$', token_id):
+                network = token_id.split(':')[0]
+                token_address = token_id.split(':')[1]
+                r = get_coingeckoterminal_data(network, token_address)
+                token_data = r['data']['attributes']
+
+                t = Token(
+                    symbol=token_data['symbol'].upper(),
+                    price_usd=round(float(token_data['price_usd']),5),
+                    percent_change=0,
+                    token_id=""
+                )
+                token_list.append(vars(t))
+            else:
+                r = get_coingecko_data(token_id)
+
+                for token in r:
+                    if token['price_change_percentage_24h'] is None:
+                        percent_change = 0
+                    else:
+                        percent_change = round(token['price_change_percentage_24h'], 2)
+                        
+                    t = Token(
+                        symbol=token['symbol'].upper(),
+                        price_usd=round(token['current_price'],5),
+                        percent_change=percent_change,
+                        token_id=token['id']
+                    )
+                    token_list.append(vars(t))
+        content["token"] = token_list
+    except Exception as e:
+        content["token"] = None
+
+    # Karma GAP milestone data
+    try:
+        if result['Karma slug'] is None or len(result['Karma slug']) < 1:
+            sorted_activity_list = None
+        else:
+            activity_list = []
+            completed_msg = None
+            karma_slug = result['Karma slug']
+            karma_data = get_karma_gap_data(karma_slug)
+
+            for grant in karma_data['grants']:
+                for m in grant['milestones']:
+                    due_date = datetime.fromtimestamp(m['data']['endsAt']).strftime(os.getenv("DATE_FORMAT"))
+                    description = markdown.markdown(m['data']['description'])
+                    if "completed" in m.keys():
+                        status = "Completed"
+                        if "reason" in m['completed']['data'].keys():
+                            completed_msg = markdown.markdown(m['completed']['data']['reason'])
+                            if "proofOfWork" in m['completed']['data'].keys():
+                                completed_msg += "\n\n" + "<a href=" + "'" + m['completed']['data']['proofOfWork'] + "'" + "target='_blank'>" + m['completed']['data']['proofOfWork'] + "</a>"
+                        else:
+                            completed_msg = None
+                    elif datetime.fromtimestamp(m['data']['endsAt']) > datetime.now():
+                        status = "In Progress"
+                    elif datetime.fromtimestamp(m['data']['endsAt']) < datetime.now():
+                        status = "Overdue"
+                    else:
+                        status = "In Progress"
+
+                    milestone = Activity(
+                        name=m['data']['title'],
+                        description=description,
+                        status=status,
+                        due_date=due_date,
+                        due_date_unix=m['data']['endsAt'],
+                        completed_msg=completed_msg,
+                        type="Milestone"
+                    )
+                    activity_list.append(vars(milestone))
+                
+                for u in grant['updates']:
+                    description = markdown.markdown(u['data']['text'])
+                    if 'data' in u and 'proofOfWork' in u['data']:
+                        description += "<a href=" + "'" + u['data']['proofOfWork'] + "'" + "target='_blank'>" + u['data']['proofOfWork'] + "</a>"
+                    due_date_string = datetime.strptime(u['createdAt'],"%Y-%m-%dT%H:%M:%S.%fZ")
+                    due_date_unix = datetime.timestamp(due_date_string) 
+
+                    update = Activity(
+                        name=u['data']['title'],
+                        description=description,
+                        status=None,
+                        due_date=None,
+                        due_date_unix=due_date_unix,
+                        completed_msg=None,
+                        type="Update")
+                    activity_list.append(vars(update))
+            
+            for update in karma_data['updates']:
+                completed_msg = ""
+                update_status = None
+                if 'deliverables' in update['data']:
+                    for d in update['data']['deliverables']:
+                        completed_msg += markdown.markdown("- [" + d['name'] + "](" + d['proof'] + ")")
+                        update_status = "Delivered"
+                description = markdown.markdown(update['data']['text'])
+                due_date_string = datetime.strptime(update['createdAt'],"%Y-%m-%dT%H:%M:%S.%fZ")
+                due_date_unix = datetime.timestamp(due_date_string)          
+                update = Activity(
+                    name=update['data']['title'],
+                    description=description,
+                    status=update_status,
+                    due_date=None,
+                    due_date_unix=due_date_unix,
+                    competed_msg=completed_msg,
+                    type="Update")
+                activity_list.append(vars(update))
+                
+            sorted_activity_list = sorted(activity_list, key=lambda d: d['due_date_unix'], reverse=True)
+        content["activity"] = sorted_activity_list
+    except Exception as e:
+        content["activity"] = None
+
+    # Get Company Impact table data
+    impact = []
+    try:
+        impact = get_project_metrics_data(baserow_id=company_id)
+        content["impact"] = impact
+    except Exception as e:
+        content["impact"] = None
+
+    return content
+
+
+# -----------------------------
 # Routes
 # -----------------------------
 
@@ -580,6 +871,86 @@ def get_projects():
     return sorted_p_list
 
 @app.get(
+    "/landscape",
+    dependencies=[],
+    summary="List all projects in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "List of projects in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "name": "Solar Energy Initiative",
+                            "description": "Solar Energy Initiative description",
+                            "location": "India",
+                            "logo": "https://example.com/logo.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "solar-energy-initiative",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        },
+                        {
+                            "id": 2,
+                            "name": "Wind Farm Alpha",
+                            "description": "Wind Farm Alpha description",
+                            "location": "USA",
+                            "logo": "https://example.com/windfarm.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "wind-farm-alpha",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_landscape():
+    p_list = get_projects()
+
+    categories_map = {}
+    sdg_dict = {}
+
+    for project in p_list:
+        # Iterate over each category in the project's categories
+        for category in project['categories']:
+            cat_name = category['name']  # Use a hashable key (assuming 'name' is unique)
+            if cat_name not in categories_map:
+                categories_map[cat_name] = {'category': category['name'], 'projects': []}
+            categories_map[cat_name]['projects'].append(project)
+            
+        # Iterate over each SDG in the project's SDGs
+        for sdg in project['sdg']:
+            key = (sdg['sdg'], sdg['sort_id'])
+            sdg_dict.setdefault(key, []).append(project)
+    
+    categories_list = list(categories_map.values())
+    sorted_categories_list = sorted(categories_list, key=lambda x: x['category'].lower())
+
+    sdg_list = [{'sdg': key[0], 'projects': landscape_list, 'sort_id': key[1]} for key, landscape_list in sdg_dict.items()]
+    sorted_sdg_list = sorted(sdg_list, key=lambda x: x['sort_id'])
+
+    result = {
+        "categories": sorted_categories_list,
+        "sdg": sorted_sdg_list
+    }
+
+    return result
+
+
+@app.get(
     "/projects/{project_slug}",
     dependencies=[Depends(get_api_key)],
     response_model=ProjectSummary,
@@ -612,7 +983,7 @@ def get_projects():
         }
     }
 )
-def get_projects(project_slug: str):
+def get_project_details(project_slug: str):
     p_list = []
     file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
     with open(file_path, "r") as _file:
@@ -623,6 +994,27 @@ def get_projects(project_slug: str):
         raise HTTPException(status_code=404, detail="Project not found")
     return result
 
+@app.get(
+    "/projects/{project_slug}/content",
+    dependencies=[Depends(get_api_key)],
+    # response_model=ProjectSummary,
+    summary="Details for a project in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "Details for a project in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_dynamic_project_details(project_slug: str):
+    content = dynamic_project_content(slug=project_slug)
+    return content
 
 @app.get(
     "/projects/{baserow_id}/metrics",

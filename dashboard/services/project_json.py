@@ -13,11 +13,6 @@ def generate_projects_json() -> str:
         "Links__join=URL&filter__field_1139228__not_empty"
     )
 
-    # news = utils.get_all_baserow_data(
-    #     os.getenv("BASEROW_TABLE_COMPANY_NEWS"),
-    #     "order_by=-Created on"
-    # )
-
     projects = utils.get_all_baserow_data(
         os.getenv("BASEROW_TABLE_COMPANY"),
         (
@@ -32,22 +27,6 @@ def generate_projects_json() -> str:
 
     for result in projects:
         company_name = result["Name"]
-
-        # # Get data from News table
-        # n_dict = {}
-        # n_list = []
-
-        # for n in news:
-        #     if any(c['value'] == company_name for c in n['Company'] ):
-        #         published_time = datetime.strptime(n['Created on'], "%Y-%m-%dT%H:%M:%S.%fZ")
-        #         formatted_time = published_time.strftime(DATE_FORMAT)
-        #         unix_time = int(published_time.timestamp())
-        #         n_dict = {"headline": n['Headline'], "url": n['Link'], "date": formatted_time, "sort_date": unix_time}
-        #         n_list.append(n_dict)
-        #     else:
-        #         pass
-
-        # sorted_n_list = sorted(n_list, key=lambda d:d['sort_date'], reverse=True)
 
         # Links
         links = [
@@ -81,6 +60,11 @@ def generate_projects_json() -> str:
             {"name": c["Name"], "slug": c["Slug"]}
             for c in result.get("Category", [])
         ]
+
+        # SDGs
+        sdg_list = []
+        for sdg in result['SDG']:
+            sdg_list.append({"sdg": sdg['value'], "sort_id": sdg["id"]})
 
         # Coverage
         coverage = []
@@ -117,7 +101,7 @@ def generate_projects_json() -> str:
             location = result["Location"],
             protocol = protocol_list,
             karma_slug = result["Karma slug"],
-            sdg = result.get("SDG"),
+            sdg = sdg_list,
         )
 
         p_list.append(vars(project))

@@ -26,7 +26,35 @@ class ProjectSummary(BaseModel):
     founders: Optional[List] = Field(None, description="List of founders for the project")
     coverage: Optional[List] = Field(None, description="List of coverage articles related to the project")
     protocol: Optional[List] = Field(None, description="Protocol(s) used by the project")
-    
+
+class Article(BaseModel):
+    title: str = Field(..., example="New Milestone Achieved")
+    url: str = Field(..., example="https://url.com/articles/new-milestone-achieved")
+    mainImage: Optional[str] = Field(None, example="https://example.com/image.png")
+    publication: Optional[str] = Field(None, example="CoinDesk")
+    date: str = Field(..., example="July 20, 2025")
+
+class NewsItem(BaseModel):
+    headline: str = Field(..., example="News Headline")
+    url: str = Field(..., example="https://url.com/articles/new-milestone-achieved")
+    date: str = Field(..., example="July 20, 2025")
+    sort_date: int = Field(..., example=349304832)
+
+class Token(BaseModel):
+    symbol: str = Field(..., example="ETH")
+    price_usd: float = Field(..., example=2500.0)
+    percent_change: Optional[float] = Field(None, example=2.5)
+    token_id: str = Field(..., example="ethereum")
+
+class Activity(BaseModel):
+    name: str = Field(..., example="New Milestone Achieved")
+    description: str = Field(..., example="Description of New Milestone Achieved")
+    status: Optional[str] = Field(None, example="In Progress")
+    due_date: Optional[str] = Field(None, example="January 31, 2026")
+    due_date_unix: int = Field(..., example=349304832)
+    completed_msg: Optional[str] = Field(None, example="We completed the new mulestone.")
+    type: str = Field(..., example="Milestone")
+
 class ProjectMetricData(BaseModel):
     """Detailed information about a project metric."""
     name: str = Field(..., example="Installed Capacity")
