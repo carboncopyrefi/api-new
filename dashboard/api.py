@@ -872,7 +872,7 @@ def get_projects():
 
 @app.get(
     "/landscape",
-    dependencies=[],
+    dependencies=[Depends(get_api_key)],
     summary="List all projects in the CARBON Copy database",
     responses={
         200: {
