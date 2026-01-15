@@ -36,9 +36,10 @@ class Article(BaseModel):
 
 class NewsItem(BaseModel):
     headline: str = Field(..., example="News Headline")
+    company: Optional[str] = Field(None, example="Company Name")
     url: str = Field(..., example="https://url.com/articles/new-milestone-achieved")
     date: str = Field(..., example="July 20, 2025")
-    sort_date: int = Field(..., example=349304832)
+    sort_date: Optional[int] = Field(None, example=349304832)
 
 class Token(BaseModel):
     symbol: str = Field(..., example="ETH")

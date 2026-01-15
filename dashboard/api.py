@@ -794,230 +794,7 @@ def get_impact_projects():
     ]
 
 @app.get(
-    "/projects",
-    dependencies=[Depends(get_api_key)],
-    response_model=List[ProjectSummary],
-    summary="List all projects in the CARBON Copy database",
-    responses={
-        200: {
-            "description": "List of projects in the CARBON Copy database with basic info",
-            "content": {
-                "application/json": {
-                    "example": [
-                        {
-                            "id": 1,
-                            "name": "Solar Energy Initiative",
-                            "description": "Solar Energy Initiative description",
-                            "location": "India",
-                            "logo": "https://example.com/logo.png",
-                            "karma_slug": "karma-slug-example",
-                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
-                            "slug": "solar-energy-initiative",
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
-                            "protocol": ["Ethereum"],
-                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
-                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
-                        },
-                        {
-                            "id": 2,
-                            "name": "Wind Farm Alpha",
-                            "description": "Wind Farm Alpha description",
-                            "location": "USA",
-                            "logo": "https://example.com/windfarm.png",
-                            "karma_slug": "karma-slug-example",
-                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
-                            "slug": "wind-farm-alpha",
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
-                            "protocol": ["Ethereum"],
-                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
-                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
-                        }
-                    ]
-                }
-            }
-        }
-    }
-)
-def get_projects():
-    p_list = []
-    file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
-    with open(file_path, "r") as _file:
-        data = json.load(_file)
-    
-    for p in data:
-        project = ProjectSummary(
-            id=p["id"],
-            slug=p["slug"],
-            name=p["name"],
-            logo=p["logo"],
-            description=p["description"],
-            location=p["location"],
-            karma_slug=p["karma_slug"],
-            sdg=p.get("sdg", []),
-            categories=p.get("categories", []),
-            links=p.get("links", []),
-            protocol=p.get("protocol", []),
-            founders=p.get("founders", []),
-            coverage=p.get("coverage", []),
-        )
-
-        p_list.append(vars(project))
-            
-    sorted_p_list = sorted(p_list, key=lambda x:x['name'].lower())
-
-    return sorted_p_list
-
-@app.get(
-    "/landscape",
-    dependencies=[Depends(get_api_key)],
-    summary="List all projects in the CARBON Copy database",
-    responses={
-        200: {
-            "description": "List of projects in the CARBON Copy database with basic info",
-            "content": {
-                "application/json": {
-                    "example": [
-                        {
-                            "id": 1,
-                            "name": "Solar Energy Initiative",
-                            "description": "Solar Energy Initiative description",
-                            "location": "India",
-                            "logo": "https://example.com/logo.png",
-                            "karma_slug": "karma-slug-example",
-                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
-                            "slug": "solar-energy-initiative",
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
-                            "protocol": ["Ethereum"],
-                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
-                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
-                        },
-                        {
-                            "id": 2,
-                            "name": "Wind Farm Alpha",
-                            "description": "Wind Farm Alpha description",
-                            "location": "USA",
-                            "logo": "https://example.com/windfarm.png",
-                            "karma_slug": "karma-slug-example",
-                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
-                            "slug": "wind-farm-alpha",
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
-                            "protocol": ["Ethereum"],
-                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
-                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
-                        }
-                    ]
-                }
-            }
-        }
-    }
-)
-def get_landscape():
-    p_list = get_projects()
-
-    categories_map = {}
-    sdg_dict = {}
-
-    for project in p_list:
-        # Iterate over each category in the project's categories
-        for category in project['categories']:
-            cat_name = category['name']  # Use a hashable key (assuming 'name' is unique)
-            if cat_name not in categories_map:
-                categories_map[cat_name] = {'category': category['name'], 'projects': []}
-            categories_map[cat_name]['projects'].append(project)
-            
-        # Iterate over each SDG in the project's SDGs
-        for sdg in project['sdg']:
-            key = (sdg['sdg'], sdg['sort_id'])
-            sdg_dict.setdefault(key, []).append(project)
-    
-    categories_list = list(categories_map.values())
-    sorted_categories_list = sorted(categories_list, key=lambda x: x['category'].lower())
-
-    sdg_list = [{'sdg': key[0], 'projects': landscape_list, 'sort_id': key[1]} for key, landscape_list in sdg_dict.items()]
-    sorted_sdg_list = sorted(sdg_list, key=lambda x: x['sort_id'])
-
-    result = {
-        "categories": sorted_categories_list,
-        "sdg": sorted_sdg_list
-    }
-
-    return result
-
-
-@app.get(
-    "/projects/{project_slug}",
-    dependencies=[Depends(get_api_key)],
-    response_model=ProjectSummary,
-    summary="Details for a project in the CARBON Copy database",
-    responses={
-        200: {
-            "description": "Details for a project in the CARBON Copy database with basic info",
-            "content": {
-                "application/json": {
-                    "example": [
-                        {
-                            "id": 1,
-                            "name": "Solar Energy Initiative",
-                            "description": "Solar Energy Initiative description",
-                            "location": "India",
-                            "logo": "https://example.com/logo.png",
-                            "karma_slug": "karma-slug-example",
-                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
-                            "slug": "solar-energy-initiative",
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
-                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
-                            "protocol": ["Ethereum"],
-                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
-                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
-                        }
-                    ]
-                }
-            }
-        }
-    }
-)
-def get_project_details(project_slug: str):
-    p_list = []
-    file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
-    with open(file_path, "r") as _file:
-        data = json.load(_file)
-
-    result = next((item for item in data if item["slug"] == project_slug), None)
-    if not result:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return result
-
-@app.get(
-    "/projects/{project_slug}/content",
-    dependencies=[Depends(get_api_key)],
-    # response_model=ProjectSummary,
-    summary="Details for a project in the CARBON Copy database",
-    responses={
-        200: {
-            "description": "Details for a project in the CARBON Copy database with basic info",
-            "content": {
-                "application/json": {
-                    "example": [
-                        
-                    ]
-                }
-            }
-        }
-    }
-)
-def get_dynamic_project_details(project_slug: str):
-    content = dynamic_project_content(slug=project_slug)
-    return content
-
-@app.get(
-    "/projects/{baserow_id}/metrics",
+    "/impact/projects/{baserow_id}/metrics",
     dependencies=[Depends(get_api_key)],
     response_model=List[ProjectMetricData],
     summary="Get metrics for a specific project",
@@ -1106,6 +883,401 @@ def get_project_metrics_data(baserow_id: int):
     )(build_cumulative(metric))
     for metric in project.metrics.all()
 ]
+
+@app.get(
+    "/projects",
+    dependencies=[Depends(get_api_key)],
+    response_model=List[ProjectSummary],
+    summary="List all projects in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "List of projects in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "name": "Solar Energy Initiative",
+                            "description": "Solar Energy Initiative description",
+                            "location": "India",
+                            "logo": "https://example.com/logo.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "solar-energy-initiative",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        },
+                        {
+                            "id": 2,
+                            "name": "Wind Farm Alpha",
+                            "description": "Wind Farm Alpha description",
+                            "location": "USA",
+                            "logo": "https://example.com/windfarm.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "wind-farm-alpha",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_projects():
+    p_list = []
+    file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
+    with open(file_path, "r") as _file:
+        data = json.load(_file)
+    
+    for p in data:
+        project = ProjectSummary(
+            id=p["id"],
+            slug=p["slug"],
+            name=p["name"],
+            logo=p["logo"],
+            description=p["description"],
+            location=p["location"],
+            karma_slug=p["karma_slug"],
+            sdg=p.get("sdg", []),
+            categories=p.get("categories", []),
+            links=p.get("links", []),
+            protocol=p.get("protocol", []),
+            founders=p.get("founders", []),
+            coverage=p.get("coverage", []),
+        )
+
+        p_list.append(vars(project))
+            
+    sorted_p_list = sorted(p_list, key=lambda x:x['name'].lower())
+
+    return sorted_p_list
+
+@app.get(
+    "/landscape",
+    dependencies=[Depends(get_api_key)],
+    summary="List all projects in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "List of projects in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "categories": [
+                        {
+                            
+                        }
+                    ],
+                    "sdg": [
+                        {
+                            
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_landscape():
+    p_list = get_projects()
+
+    categories_map = {}
+    sdg_dict = {}
+
+    for project in p_list:
+        # Iterate over each category in the project's categories
+        for category in project['categories']:
+            cat_name = category['name']  # Use a hashable key (assuming 'name' is unique)
+            if cat_name not in categories_map:
+                categories_map[cat_name] = {'category': category['name'], 'projects': []}
+            categories_map[cat_name]['projects'].append(project)
+            
+        # Iterate over each SDG in the project's SDGs
+        for sdg in project['sdg']:
+            key = (sdg['sdg'], sdg['sort_id'])
+            sdg_dict.setdefault(key, []).append(project)
+    
+    categories_list = list(categories_map.values())
+    sorted_categories_list = sorted(categories_list, key=lambda x: x['category'].lower())
+
+    sdg_list = [{'sdg': key[0], 'projects': landscape_list, 'sort_id': key[1]} for key, landscape_list in sdg_dict.items()]
+    sorted_sdg_list = sorted(sdg_list, key=lambda x: x['sort_id'])
+
+    result = {
+        "categories": sorted_categories_list,
+        "sdg": sorted_sdg_list
+    }
+
+    return result
+
+@app.get(
+    "/tokens",
+    dependencies=[Depends(get_api_key)],
+    summary="List all ReFi project tokens in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "List of ReFi project tokens in the CARBON Copy database",
+            "content": {
+                "application/json": {
+                    "count": [
+                        {
+                            
+                        }
+                    ],
+                    "tokens": [
+                        {
+                            
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_token_list():
+    token_list = []
+    token_data_list = []
+    combined_list = []
+    cg_list = ""
+    params = "filter__field_2250961__not_empty&filter__field_1248804__not_empty&include=Name,Slug,Token,Logo"
+    tokens = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY"), params)
+    
+    for token in tokens:
+        token_id = token['Token']
+        
+        if re.search(r'^[^:]+:[^:]+$', token_id):
+            cgt_token_dict = {'project': token['Name'], 'slug': token['Slug'], 'token_id': token_id, 'logo': token['Logo'], 'url': None}
+            token_list.append(cgt_token_dict)
+
+            network = token_id.split(':')[0]
+            token_address = token_id.split(':')[1]
+            r = get_coingeckoterminal_data(network, token_address)
+            cgt_token_data = r['data']['attributes']
+            
+            t = Token(
+                symbol=cgt_token_data['symbol'].upper(),
+                price_usd=round(float(cgt_token_data['price_usd']),5),
+                percent_change=0,
+                token_id=token_id
+            )
+            cgt_token_dict = vars(t)
+            token_data_list.append(cgt_token_dict)
+            
+        else:
+            if re.search(r'^[a-zA-Z0-9,-]+,+[a-zA-Z0-9,-]+$', token_id):
+                tokens = token_id.split(",")
+                for t in tokens:
+                    cg_list += t + ','
+                    token_url = os.getenv("COINGECKO_BASE_URL") + t
+                    token_dict = {'project': token['Name'], 'slug': token['Slug'], 'token_id': t, 'logo': token['Logo'], 'url': token_url}
+                    token_list.append(token_dict)
+            else:
+                cg_list += token_id + ',' 
+                token_url = os.getenv("COINGECKO_BASE_URL") + token_id
+                token_dict = {'project': token['Name'], 'slug': token['Slug'], 'token_id': token_id, 'logo': token['Logo'], 'url': token_url}
+                token_list.append(token_dict)
+
+    token_data = get_coingecko_data(cg_list)
+
+    # Process data from CoinGecko
+
+    for token in token_data:
+        if token['price_change_percentage_24h'] is None:
+            percent_change = 0
+        else:
+            percent_change = round(token['price_change_percentage_24h'], 2)
+        t = Token(
+            symbol=token['symbol'].upper(),
+            price_usd=round(token['current_price'],5),
+            percent_change=percent_change,
+            token_id=token['id'])
+        
+        token_data_list.append(vars(t))
+
+    # Combine lists
+
+    for item1 in token_list:
+        matching_item = next((item2 for item2 in token_data_list if item2['token_id'] == item1['token_id']), None)
+        if matching_item:
+            combined_dict = {**item1, **matching_item}  # Merge dictionaries
+            combined_list.append(combined_dict)
+
+    sorted_combined_list = sorted(combined_list, key=lambda x:x['project'].lower())
+    token_count = len(token_data_list)
+
+    result = {
+        "count": token_count,
+        "tokens": sorted_combined_list
+    }
+
+    return result
+
+@app.get(
+    "/news",
+    dependencies=[Depends(get_api_key)],
+    summary="List all ReFi project news in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "List of ReFi project news in the CARBON Copy database",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "headline":"Lemonade Foundation chooses Etherisc to protect 100 million farmers by 2030",
+                            "company":"Etherisc",
+                            "url":"https://x.com/etherisc/status/1992242282557264283?s=20",
+                            "date":"November 27, 2025",
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_news_list():
+    news_list = []
+
+    params = "&size=100&order_by=-Created on"
+    data = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY_NEWS"), params)
+
+    for item in data:
+        if item['Display'] is True:
+            published_time = datetime.strptime(item['Created on'], "%Y-%m-%dT%H:%M:%S.%fZ")
+            formatted_time = published_time.strftime(os.getenv("DATE_FORMAT"))
+            news = NewsItem(
+                headline=item['Headline'],
+                company=item['Company'][0]['value'],
+                url=item['Link'],
+                date=formatted_time
+            )
+            
+            news_list.append(vars(news))
+        else:
+            continue
+    
+    return news_list
+
+@app.get(
+    "/content/newsletter",
+    dependencies=[Depends(get_api_key)],
+    summary="List all articles from the CARBON Copy newsletter",
+    responses={
+        200: {
+            "description": "List all articles from the CARBON Copy newsletter",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "title":"Gitcoin Grants 24, $AZUSD, and Impact Stablecoin Tracker",
+                            "url":"https://paragraph.com/@carboncopy/gitcoin-grants-24-azusd-and-impact-stablecoin-tracker",
+                            "mainImage":"https://storage.googleapis.com/papyrus_images/90d4cd3d0dec49135b7818a0314d0527c77b179c419c2299a12283d549daa0c5.jpg",
+                            "date":"October 27, 2025"
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_cc_newsletter():
+    newsletter_list = []
+
+    r = requests.get("https://paragraph.xyz/api/blogs/rss/@carboncopy")
+
+    f = feedparser.parse(r.text)
+
+    for article in f.entries[0:3]:
+        mainImage = ""
+        date = parse_datetime(article.published)
+        formatted_date = date.strftime(os.getenv("DATE_FORMAT"))
+        for link in article.links:
+            if link.type == "image/jpg" or link.type == "image/jpeg":
+                mainImage = link.href
+
+        a = Article(
+            title=article.title,
+            url=article.link,
+            mainImage=mainImage,
+            publication="Paragraph",
+            date=formatted_date
+            )
+        
+        newsletter_list.append(vars(a))
+
+    return newsletter_list
+
+@app.get(
+    "/projects/{project_slug}",
+    dependencies=[Depends(get_api_key)],
+    response_model=ProjectSummary,
+    summary="Details for a project in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "Details for a project in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "name": "Solar Energy Initiative",
+                            "description": "Solar Energy Initiative description",
+                            "location": "India",
+                            "logo": "https://example.com/logo.png",
+                            "karma_slug": "karma-slug-example",
+                            "sdg": [{"id": 4440353, "value": "Goal 17 - Partnerships for the Goals", "color": "light-cyan"}],
+                            "slug": "solar-energy-initiative",
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "categories": [{"name": "Renewable Energy", "slug": "renewable-energy"}],
+                            "links": [{"platform": "Website", "url": "https://www.url.com/", "icon": "globe"}],
+                            "protocol": ["Ethereum"],
+                            "founders": [{"name": "John Doe", "platforms": [{"platform": "twitter-x", "url": "https://x.com/username"}]}],
+                            "coverage": [{"headline": "Headline", "url": "https://url.com", "date": "December 08, 2023", "sort_date": 1701981625}]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_project_details(project_slug: str):
+    p_list = []
+    file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
+    with open(file_path, "r") as _file:
+        data = json.load(_file)
+
+    result = next((item for item in data if item["slug"] == project_slug), None)
+    if not result:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return result
+
+@app.get(
+    "/projects/{project_slug}/content",
+    dependencies=[Depends(get_api_key)],
+    # response_model=ProjectSummary,
+    summary="Details for a project in the CARBON Copy database",
+    responses={
+        200: {
+            "description": "Details for a project in the CARBON Copy database with basic info",
+            "content": {
+                "application/json": {
+                    "example": [
+                        
+                    ]
+                }
+            }
+        }
+    }
+)
+def get_dynamic_project_details(project_slug: str):
+    content = dynamic_project_content(slug=project_slug)
+    return content
 
 @app.get(
     "/aggregate-metric-types",

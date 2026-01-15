@@ -48,7 +48,7 @@ def get_baserow_project_data(baserow_id):
             f"Failed to fetch Baserow impact metric data with status {response.status_code}. {response.text}"
         )
 
-def get_all_baserow_data(table_id: str, params: str) -> list[dict]:
+def get_all_baserow_data(table_id: str, params: str, single_page: bool = False) -> list[dict]:
     """Fetch all rows from a Baserow table with pagination support."""
     url = f"{BASEROW_API}{table_id}/?user_field_names=true&{params}"
     headers = {
@@ -57,7 +57,6 @@ def get_all_baserow_data(table_id: str, params: str) -> list[dict]:
     }
 
     all_results = []
-
     while url:
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
@@ -65,10 +64,13 @@ def get_all_baserow_data(table_id: str, params: str) -> list[dict]:
                 f"Failed to fetch Baserow data with status {response.status_code}. {response.text}"
             )
         data = response.json()
-        all_results.extend(data["results"])
-        url = data.get("next")  # None when finished
+        if single_page == True:
+            return data["results"]
+        else:
+            all_results.extend(data["results"])
+            url = data.get("next")  # None when finished
 
-    return all_results
+            return all_results
 
 def contact_icon(contact):
     icons = {
