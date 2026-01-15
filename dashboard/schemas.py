@@ -26,6 +26,7 @@ class ProjectSummary(BaseModel):
     founders: Optional[List] = Field(None, description="List of founders for the project")
     coverage: Optional[List] = Field(None, description="List of coverage articles related to the project")
     protocol: Optional[List] = Field(None, description="Protocol(s) used by the project")
+    token: Optional[str] = Field(None, example="ether")
 
 class Article(BaseModel):
     title: str = Field(..., example="New Milestone Achieved")
@@ -46,6 +47,8 @@ class Token(BaseModel):
     price_usd: float = Field(..., example=2500.0)
     percent_change: Optional[float] = Field(None, example=2.5)
     token_id: str = Field(..., example="ethereum")
+    image: Optional[str] = Field(None, exmaple="https://image.com/image.png")
+    url: Optional[str] = Field(None, example="https://coingecko.com/token")
 
 class Activity(BaseModel):
     name: str = Field(..., example="New Milestone Achieved")
@@ -55,6 +58,13 @@ class Activity(BaseModel):
     due_date_unix: int = Field(..., example=349304832)
     completed_msg: Optional[str] = Field(None, example="We completed the new mulestone.")
     type: str = Field(..., example="Milestone")
+
+class CategoryResponse(BaseModel):
+    metadata: dict = Field(..., example='{"count":8,"description":"Standalone cryptocurrencies and stablecoins aimed primarily at making a positive ecological and/or social impact.","name":"Impact Currency","slug":"impact-currency"}')
+    projects: List[ProjectSummary] = Field(..., example='[{"location":"Peru","logo":"https://pbs.twimg.com/profile_images/1507695433199632399/XzLPrKxu_400x400.jpg","name":"Alinticoin","short_description":"Alinticoin finances the future of electricity from the photosynthesis of plants.","slug":"alinticoin"]')
+    tokens: List[Token] = Field(..., example="")
+    news: List[NewsItem] = Field(..., example="")
+    fundraising: List[dict] = Field(..., example='[{"amount":"46,697.09","details":[{"amount":"678.84","date":"2025-02-05","funding_type":"Gitcoin Grants","round":"Glo Dollar x Optimism Builders","url":"","year":"2025"}]')
 
 class ProjectMetricData(BaseModel):
     """Detailed information about a project metric."""

@@ -10,15 +10,16 @@ def generate_projects_json() -> str:
 
     founders = utils.get_all_baserow_data(
         os.getenv("BASEROW_TABLE_COMPANY_FOUNDER"),
-        "Links__join=URL&filter__field_1139228__not_empty"
+        "Links__join=URL&filter__field_1139228__not_empty&size=200"
     )
 
     projects = utils.get_all_baserow_data(
         os.getenv("BASEROW_TABLE_COMPANY"),
         (
             f"filter__field_1248804__not_empty"
+            f"&size=200"
             f"&Links__join=URL"
-            f"&Category__join=Name,Slug"
+            f"&Category__join=Name,Slug,Description"
             f"&Coverage__join=Headline,Link,Publication,Publish Date"
         )
     )
@@ -57,7 +58,7 @@ def generate_projects_json() -> str:
 
         # Categories
         categories = [
-            {"name": c["Name"], "slug": c["Slug"]}
+            {"name": c["Name"], "slug": c["Slug"], "description": c["Description"]}
             for c in result.get("Category", [])
         ]
 
@@ -101,6 +102,7 @@ def generate_projects_json() -> str:
             location = result["Location"],
             protocol = protocol_list,
             karma_slug = result["Karma slug"],
+            token = result["Token"],
             sdg = sdg_list,
         )
 

@@ -26,6 +26,7 @@ from .schemas import (
     Article,
     Token,
     Activity,
+    CategoryResponse,
     NewsItem,
     ProjectMetricData,
     AggregateMetricTypeList,
@@ -953,6 +954,7 @@ def get_projects():
             protocol=p.get("protocol", []),
             founders=p.get("founders", []),
             coverage=p.get("coverage", []),
+            token=p["token"]
         )
 
         p_list.append(vars(project))
@@ -996,7 +998,7 @@ def get_landscape():
         for category in project['categories']:
             cat_name = category['name']  # Use a hashable key (assuming 'name' is unique)
             if cat_name not in categories_map:
-                categories_map[cat_name] = {'category': category['name'], 'projects': []}
+                categories_map[cat_name] = {'category': category['name'], 'slug': category['slug'], 'description': category['description'], 'projects': []}
             categories_map[cat_name]['projects'].append(project)
             
         # Iterate over each SDG in the project's SDGs
@@ -1212,6 +1214,167 @@ def get_cc_newsletter():
         newsletter_list.append(vars(a))
 
     return newsletter_list
+
+@app.get(
+    "/categories/{slug}",
+    dependencies=[Depends(get_api_key)],
+    summary="List all categories in the CARBON Copy database",
+    response_model=CategoryResponse,
+    responses={
+        200: {
+            "description": "List of categories in the CARBON Copy database",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            
+                        }
+                    ]
+                }
+            }
+        }
+    }
+)
+def category_projects(slug):
+    p_list = []
+    comp_list = []
+    category_news_list = []
+    category_fundraising_list = []
+    token_list = []
+    filter_string = ""
+    tokens = ""
+    data = get_landscape()
+    categories = data["categories"]
+
+    try:
+        result = next((cat for cat in categories if cat["slug"] == slug), None)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error retrieving category information")
+    
+    if result is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    
+    metadata = {"name": result['category'], "slug": result['slug'], "description": result['description'], "count": len(result["projects"])}    
+
+    for p in result["projects"]:
+        comp_list.append(p['name'])
+        project = ProjectSummary(
+            id=p["id"],
+            name=p['name'],
+            slug=p["slug"],
+            description=p['description'],
+            logo=p['logo'],
+            location=p['location'],
+            karma_slug=p["karma_slug"],
+            categories=p["categories"],
+            sdg=p["sdg"],
+            links=p["links"],
+            founders=p["founders"],
+            coverage=p["coverage"],
+            protocol=p["protocol"],
+            token=p["token"],
+        )
+        p_list.append(vars(project))
+        
+        if project.token:
+            tokens += project.token + ","
+
+    sorted_p_list = sorted(p_list, key=lambda x:x['name'].lower())
+
+    if tokens != "":
+        try:
+            token_data = get_coingecko_data(tokens)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Error getting data from Coingecko.")
+
+        for token in token_data:
+            if token['price_change_percentage_24h'] is None:
+                percent_change = 0
+            else:
+                percent_change = round(token['price_change_percentage_24h'], 2)
+            url = os.getenv("COINGECKO_BASE_URL") + token['id']
+            token = Token(
+                image=token['image'],
+                symbol=token['symbol'].upper(),
+                price_usd=round(token['current_price'],5),
+                percent_change=percent_change,
+                url=url,
+                token_id=token["id"],
+            )
+            token_list.append(vars(token))
+    else:
+        pass
+
+    # Get a list of news items related to projects in the category
+    try:
+        news_data = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY_NEWS"),"size=50&order_by=-Created on", single_page=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error loading news items")
+    news_list = [
+        news_item for news_item in news_data
+        if any(project['value'] in comp_list for project in news_item["Company"])
+    ]
+
+    # Create a list of news item dicts
+    for item in news_list[0:60]:
+        published_time = datetime.strptime(item['Created on'], "%Y-%m-%dT%H:%M:%S.%fZ")
+        formatted_time = published_time.strftime(os.getenv("DATE_FORMAT"))
+        category_news = NewsItem(
+            headline=item['Headline'],
+            date=formatted_time,
+            url=item['Link'],
+            company=item['Company'][0]["value"]
+        )
+        
+        category_news_list.append(vars(category_news))
+
+    # Get fundraising data
+    for p in comp_list:
+        filter_string += "filter__field_2209789__link_row_contains=" + p + "&"
+
+    fundraising_params = "filter_type=OR&" + filter_string
+    try:
+        fundraising_data = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY_FUNDRAISING"), fundraising_params)
+    except Exception as e:
+        raise HTTPException(status_code=500, details="Could not retrieve fundraising data")
+    fundraising_list = [
+        fundraising_item for fundraising_item in fundraising_data
+        if any(project['value'] in comp_list for project in fundraising_item["Company"])
+    ]
+
+    for f in fundraising_list:
+        if f['Project ID'] is None or len(f['Project ID']) < 1:
+            funding_type = f['Type']['value']
+            fundraising_dict = {
+                "funding_type": funding_type,
+                "amount": f['Amount'],
+                "round": None if f['Round'] is None else f['Round']['value'],
+                "date": f["Date"],
+                "year": f["Date"].split('-')[0],
+                "url": f['Link']
+            }
+            category_fundraising_list.append(fundraising_dict)
+
+        # Get Giveth data
+        if f['Project ID'] is not None and f['Type']['value'] == "Giveth":
+            try:          
+                giveth_data = get_giveth_data(f['Project ID'])   
+            except Exception as e:
+                raise HTTPException(status_code=500, detail="Could not retrieve Giveth data")             
+            category_fundraising_list.append(giveth_data)
+        else:
+            pass
+
+    fundraising_sums = calculate_dict_sums(category_fundraising_list)
+
+    category = vars(CategoryResponse(
+        metadata=metadata,
+        projects=sorted_p_list,
+        tokens=token_list,
+        news=category_news_list,
+        fundraising=fundraising_sums))
+
+    return category
 
 @app.get(
     "/projects/{project_slug}",

@@ -64,13 +64,14 @@ def get_all_baserow_data(table_id: str, params: str, single_page: bool = False) 
                 f"Failed to fetch Baserow data with status {response.status_code}. {response.text}"
             )
         data = response.json()
-        if single_page == True:
-            return data["results"]
-        else:
-            all_results.extend(data["results"])
-            url = data.get("next")  # None when finished
 
-            return all_results
+        if single_page:
+            return data["results"]
+        
+        all_results.extend(data["results"])
+        url = data.get("next")  # None when finished
+
+    return all_results
 
 def contact_icon(contact):
     icons = {
