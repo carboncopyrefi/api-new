@@ -59,6 +59,14 @@ class Activity(BaseModel):
     completed_msg: Optional[str] = Field(None, example="We completed the new mulestone.")
     type: str = Field(..., example="Milestone")
 
+class Update(BaseModel):
+    id: str = Field(..., example="0x5189ee3c3469e6115a0252c5441c678e926011fb06cd4674527aaf632b55d692")
+    title: str = Field(..., example="Update #1")
+    project: str = Field(..., example="Project Name")
+    created_date: Optional[str] = Field(None, example="July 14, 2026")
+    sort_date: Optional[int] = Field(None, example="2025-04-30T16:00:00.000Z")
+    details: Optional[str] = Field(None, example="<p>Update details")
+
 class CategoryResponse(BaseModel):
     metadata: dict = Field(..., example='{"count":8,"description":"Standalone cryptocurrencies and stablecoins aimed primarily at making a positive ecological and/or social impact.","name":"Impact Currency","slug":"impact-currency"}')
     projects: List[ProjectSummary] = Field(..., example='[{"location":"Peru","logo":"https://pbs.twimg.com/profile_images/1507695433199632399/XzLPrKxu_400x400.jpg","name":"Alinticoin","short_description":"Alinticoin finances the future of electricity from the photosynthesis of plants.","slug":"alinticoin"]')

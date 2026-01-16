@@ -11,6 +11,7 @@ from django.shortcuts import render, redirect
 from django.utils.safestring import mark_safe
 from django.http import HttpRequest
 from .services.project_json import generate_projects_json
+from .services.impact_feed import generate_impact_json
 from django.urls import path
 
 API_URL = os.getenv('CC_API_URL')
@@ -323,6 +324,11 @@ class ProjectAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.generate_projects_json_view),
                 name="generate-projects-json",
             ),
+            path(
+                "generate-impact-json/",
+                self.admin_site.admin_view(self.generate_impact_json_view),
+                name="generate-impact-json",
+            ),
         ]
         return custom_urls + urls
     
@@ -342,9 +348,26 @@ class ProjectAdmin(admin.ModelAdmin):
             )
         return redirect("..")
     
+    def generate_impact_json_view(self, request):
+        try:
+            path = generate_impact_json()
+            self.message_user(
+                request,
+                f"impact_feed.json generated successfully at {path}",
+                level=messages.SUCCESS,
+            )
+        except Exception as e:
+            self.message_user(
+                request,
+                f"Failed to generate impact_feed.json: {e}",
+                level=messages.ERROR,
+            )
+        return redirect("..")
+    
     def changelist_view(self, request, extra_context=None):
         extra_context = extra_context or {}
         extra_context["generate_json_button"] = True
+        extra_context["generate_impact_feed_button"] = True
         return super().changelist_view(request, extra_context)
 
 @admin.register(AggregateMetric)

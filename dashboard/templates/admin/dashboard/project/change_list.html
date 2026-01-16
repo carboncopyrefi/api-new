@@ -2,9 +2,14 @@
 
 {% block object-tools %}
     {{ block.super }}
-    <li style="list-style-type: none;">
+    <li style="list-style-type: none;display:inline;margin-right:10px">
         <a href="{% url 'admin:generate-projects-json' %}" class="button">
             Generate Project JSON
+        </a>
+    </li>
+    <li style="list-style-type: none;display:inline">
+        <a href="{% url 'admin:generate-impact-json' %}" class="button">
+            Generate Impact Feed JSON
         </a>
     </li>
 {% endblock %}

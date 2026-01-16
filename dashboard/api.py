@@ -718,7 +718,7 @@ def dynamic_project_content(slug):
                     status=update_status,
                     due_date=None,
                     due_date_unix=due_date_unix,
-                    competed_msg=completed_msg,
+                    completed_msg=completed_msg,
                     type="Update")
                 activity_list.append(vars(update))
                 
@@ -884,6 +884,38 @@ def get_project_metrics_data(baserow_id: int):
     )(build_cumulative(metric))
     for metric in project.metrics.all()
 ]
+
+@app.get(
+    "/impact/feed",
+    dependencies=[],
+    summary="Provides a feed of updates from Karma",
+    responses={
+        200: {
+            "description": "Provides a feed of updates from Karma",
+            "content": {
+                "application/json": {
+                    "example":
+                        [
+                            {
+                                "id": "0x8122f0204829e93deb20e4e0095080db6a7548fa1ef60147631a834eda6b4e73",
+                                "title": "October 2025",
+                                "project": "CARBON Copy",
+                                "created_date": "November 25, 2025",
+                                "sort_date": 1764017698,
+                                "details": "<p>Spent most of October polishing the new version of CARBON Copy</p>"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+)
+def get_impact_feed():
+    file_path = os.path.join(settings.STATIC_ROOT, "impact_feed.json")
+    with open(file_path, "r") as _file:
+        data = json.load(_file)
+
+    return data
 
 @app.get(
     "/projects",
@@ -1559,7 +1591,6 @@ def get_overview():
 )
 def venture_funding_endpoint():
     return get_venture_funding_data()
-
 
 @app.get("/link-preview", dependencies=[Depends(get_api_key)])
 async def link_preview(url: str):
