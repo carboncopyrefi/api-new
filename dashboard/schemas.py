@@ -91,6 +91,11 @@ class AggregateMetricTypeList(BaseModel):
     slug: str = Field(..., example="total-installed-capacity")
     pie_chart: str = Field(..., example="Project", description="Pie chart grouping for this metric type")
 
+class AggregateMetricTypeOut(BaseModel):
+    name: str = Field(..., example="Total Installed Capacity")
+    description: Optional[str] = Field(None, example="Sum of installed capacity across all projects")   
+    slug: str = Field(..., example="total-installed-capacity")
+
 class AggregateMetricItem(BaseModel):
     name: str
     value: float = Field(..., description="Sum of current_value across project metrics")
@@ -105,11 +110,27 @@ class AggregateMetricTypeTable(BaseModel):
     headers: List[str]
     rows: List[List[Union[str, float, None]]]
 
+class AggregateMetricGroup(BaseModel):
+    type: AggregateMetricTypeOut
+    metrics: List[AggregateMetricItem]
+
 class SDGList(BaseModel):
     name: str = Field(..., example="Goal #1 - No Poverty")
     description: Optional[str] = Field(None, example="SDG description")   
     slug: str = Field(..., example="1-no-poverty")
+    metric_groups: List[AggregateMetricGroup]
+
+class SDGMetricGroup(BaseModel):
+    type: AggregateMetricTypeOut
     metrics: List[AggregateMetricItem]
+    table: AggregateMetricTypeTable
+    charts: Optional[List[dict]] | None = None
+
+class SDGDetailResponse(BaseModel):
+    name: str
+    description: str | None
+    slug: str
+    groups: List[SDGMetricGroup]
 
 class PieChartDataItem(BaseModel):
     name: str  # project name

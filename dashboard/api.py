@@ -1,4 +1,9 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request, Form
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, RedirectResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import django, os, json, requests, feedparser, re, markdown
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
@@ -32,6 +37,8 @@ from .schemas import (
     AggregateMetricTypeList,
     AggregateMetricItem,
     AggregateMetricTypeTable,
+    SDGDetailResponse,
+    SDGMetricGroup,
     SDGList,
     AggregateMetricTypeResponse,
     OverviewResponse,
@@ -46,13 +53,18 @@ from .schemas import (
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard.settings")
 django.setup()
 
-from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, SDG, AggregateMetricType  # noqa: E402
+from .models import Project, ProjectMetric, ProjectMetricData as MetricData, AggregateMetric, SDG, AggregateMetricType, APIKey  # noqa: E402
 
 # app = FastAPI(title="CARBON Copy API", dependencies=[Depends(get_api_key)])
 app = FastAPI(title="CARBON Copy API")
 app.add_middleware(DjangoDBMiddleware)
 
+templates = Jinja2Templates(directory="templates")
 
+# Create a limiter — identify clients by IP
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ---------------------
 # Helper: validate type_slug
@@ -73,6 +85,181 @@ def _get_sdg_display(sdg_slug: str) -> Optional[str]:
         return SDG.objects.get(slug=sdg_slug).name
     except SDG.DoesNotExist:
         return None
+
+
+# ---------------------
+# Helper: table builder
+# ---------------------
+def _build_table(aggs, project_metric_map, project_name_map):
+    headers = ["Project Name"] + [
+        f"{agg.name} ({agg.unit})" if agg.unit else agg.name
+        for agg in aggs
+    ] + ["Last Updated"]
+
+    rows = []
+
+    for project_id, metrics_dict in project_metric_map.items():
+        project = Project.objects.get(id=project_id)
+
+        latest_date = (
+            project.metrics.aggregate(
+                latest=Max("current_value_date")
+            )["latest"]
+        )
+
+        row = [project_name_map[project_id]]
+        for agg in aggs:
+            row.append(metrics_dict.get(agg.id))
+        row.append(latest_date.date().isoformat() if latest_date else None)
+
+        rows.append(row)
+
+    return AggregateMetricTypeTable(headers=headers, rows=rows)
+
+# ---------------------
+# Helper: chart builder
+# ---------------------
+def _build_charts(aggs, chart_flag_field):
+    chart_metrics = [agg for agg in aggs if getattr(agg, chart_flag_field)]
+
+    if not chart_metrics:
+        return None
+
+    all_months = set()
+    metric_month_maps = {}
+
+    for agg in chart_metrics:
+        month_values = (
+            MetricData.objects
+            .filter(project_metrics__aggregate_metric=agg)
+            .annotate(month=TruncMonth("date"))
+            .values("month")
+            .annotate(total=Coalesce(Sum("value"), 0.0))
+            .order_by("month")
+        )
+
+        raw = {
+            entry["month"].strftime("%Y-%m"): float(entry["total"] or 0.0)
+            for entry in month_values
+        }
+        metric_month_maps[agg.name] = raw
+        all_months.update(entry["month"] for entry in month_values)
+
+    if not all_months:
+        return None
+
+    current = min(all_months)
+    max_month = max(all_months)
+
+    month_axis = []
+    while current <= max_month:
+        month_axis.append(current.strftime("%Y-%m"))
+        current += relativedelta(months=1)
+
+    chart_data_map = defaultdict(dict)
+
+    for agg in chart_metrics:
+        raw = metric_month_maps.get(agg.name, {})
+        running = 0.0
+
+        for month in month_axis:
+            chart_data_map[month]["month"] = month
+            if month in raw:
+                running += raw[month]
+            chart_data_map[month][agg.name] = running
+
+    return sorted(chart_data_map.values(), key=lambda x: x["month"])
+
+# ---------------------
+# Helper: pie chart builder
+# ---------------------
+def _build_pie(
+    aggs,
+    project_metric_map,
+    project_name_map,
+    *,
+    metric_type,
+):
+    """
+    Build pie chart data for an aggregate metric type.
+    Returns None if no pie chart applies.
+    """
+
+    if metric_type.pie_chart != "project":
+        return None
+
+    pie_metric = next(
+        (agg for agg in aggs if agg.pie_chart),
+        None
+    )
+
+    if not pie_metric:
+        return None
+
+    items = []
+
+    for project_id, metrics_dict in project_metric_map.items():
+        value = metrics_dict.get(pie_metric.id)
+        if value not in (None, 0):
+            items.append({
+                "name": project_name_map[project_id],
+                "value": float(value),
+                "project_id": project_id,
+            })
+
+    if not items:
+        return None
+
+    return {
+        "title": pie_metric.name,
+        "items": items,
+    }
+
+# ---------------------
+# Helper: metric group builder
+# ---------------------
+def _build_metric_group(
+    aggs,
+    *,
+    chart_flag_field,
+    include_pie = None,
+    metric_type=None,
+):
+    if include_pie and not metric_type:
+        raise ValueError("metric_type is required when include_pie=True")
+
+    metrics_out = []
+    project_metric_map = {}
+    project_name_map = {}
+
+    for agg in aggs:
+        agg_item, pm_qs = _agg_metric_calc(agg)
+        metrics_out.append(agg_item)
+
+        for pm in pm_qs.prefetch_related("projects"):
+            for project in pm.projects.all():
+                pid = project.id
+                project_name_map[pid] = project.name
+                project_metric_map.setdefault(pid, {})[agg.id] = pm.current_value
+
+    table = _build_table(aggs, project_metric_map, project_name_map)
+    charts = _build_charts(aggs, chart_flag_field)
+
+    pie_chart = None
+    if include_pie:
+        pie_chart = _build_pie(
+            aggs,
+            project_metric_map,
+            project_name_map,
+            metric_type=metric_type,
+        )
+
+    return {
+        "metrics": metrics_out,
+        "table": table,
+        "charts": charts,
+        "pie_chart": pie_chart,
+    }
 
 # ---------------------
 # Global aggregate metric value and percent calculator
@@ -130,187 +317,6 @@ def _agg_metric_calc(agg: str):
         percent_change_7d=percent_change_7d,
         percent_change_28d=percent_change_28d,
     ), pm_qs
-
-
-# ---------------------
-# Main Aggregator function
-# ---------------------
-def get_aggregate_metric_type_db_optimized(slug: str, slug_type: str) -> AggregateMetricTypeResponse:
-    """
-    Returns the aggregate metric type with aggregated sums, percent changes,
-    and a list of projects and their project metric values for each aggregate metric.
-    """
-    if slug_type == "sdg":
-        display = _get_sdg_display(slug)
-        if not display:
-            raise HTTPException(status_code=404, detail="Invalid SDG")
-        
-        agg_qs = AggregateMetric.objects.filter(sdg__slug=slug)
-    
-    else:
-        display = _get_type_display(slug)
-        if not display:
-            raise HTTPException(status_code=404, detail="Invalid aggregate metric type")
-
-        agg_qs = AggregateMetric.objects.filter(type__slug=slug)
-    
-    metrics_out = []
-
-    # Pre-build headers
-    headers = ["Project Name"] + [
-        f"{agg.name} ({agg.unit})" if agg.unit else agg.name
-        for agg in agg_qs] + ["Last Updated"]
-
-    # Build a map: {project_id: {metric_id: value}}
-    project_metric_map = {}
-    project_name_map = {}
-    
-    if slug_type == "sdg":
-        chart_metrics = agg_qs.filter(sdg_chart=True)  # only metrics that should have SDG charts
-    else:
-        chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
-    chart_data_map = defaultdict(dict)
-
-    for agg in agg_qs:
-        
-        # --- Run metric calculations and percent change ---
-        agg_item, pm_qs = _agg_metric_calc(agg)
-        metrics_out.append(agg_item)
-
-        # --- Fill project metric mapping ---
-        for pm in pm_qs.prefetch_related('projects'):
-            for project in pm.projects.all():
-                project_id = project.id
-                project_name_map[project_id] = project.name
-                if project_id not in project_metric_map:
-                    project_metric_map[project_id] = {}
-                project_metric_map[project_id][agg.id] = pm.current_value
-
-        # --- Chart Data ---
-        # 1. Collect month ranges across all metrics
-        all_months = set()
-        metric_month_maps = {}
-
-        for agg in chart_metrics:
-            month_values = (
-                MetricData.objects
-                .filter(project_metrics__aggregate_metric=agg)
-                .annotate(month=TruncMonth('date'))
-                .values('month')
-                .annotate(total=Coalesce(Sum('value'), 0.0))
-                .order_by('month')
-            )
-
-            # Store per-metric data
-            raw_month_map = {
-                entry['month'].strftime('%Y-%m'): float(entry['total'] or 0.0)
-                for entry in month_values
-            }
-            metric_month_maps[agg.name] = raw_month_map
-
-            # Add these months into global axis
-            for entry in month_values:
-                all_months.add(entry['month'])
-
-        # 2. Build full continuous month axis (min → max)
-        if all_months:
-            min_month = min(all_months)
-            max_month = max(all_months)
-
-            current = min_month
-            month_axis = []
-            while current <= max_month:
-                month_axis.append(current.strftime('%Y-%m'))
-                current += relativedelta(months=1)
-
-        # 3. Fill data for each metric using running totals
-        for agg in chart_metrics:
-            raw_month_map = metric_month_maps.get(agg.name, {})
-            running_total = 0.0
-            last_value = 0.0
-
-            for date_str in month_axis:
-                chart_data_map[date_str]["month"] = date_str
-
-                if date_str in raw_month_map:
-                    running_total += raw_month_map[date_str]
-                    last_value = running_total
-
-                chart_data_map[date_str][agg.name] = last_value
-
-        # 4. Convert chart_data_map to sorted list
-        chart_data = [chart_data_map[m] for m in sorted(chart_data_map)]
-
-        # ---- Pie chart (project breakdown) ----
-        pie_chart_data = None
-
-        # Which metric is flagged as the pie source?
-        pie_metric = agg_qs.filter(pie_chart=True).first()
-
-        # And is the TYPE configured for project-level pies?
-        if slug_type == "sdg":
-            obj = SDG.objects.only("name").get(slug=slug)
-            pie_chart_items = None
-        else:
-            obj = AggregateMetricType.objects.only("pie_chart", "name").get(slug=slug)
-
-            if pie_metric and obj.pie_chart == "project":
-                pie_chart_items = []
-                for project_id, metrics_dict in project_metric_map.items():
-                    value = metrics_dict.get(pie_metric.id, 0)
-                    if value not in (None, 0):
-                        pie_chart_items.append({
-                            "name": project_name_map[project_id],
-                            "value": float(value),
-                            "project_id": project_id,
-                        })
-
-                if pie_chart_items:
-                    pie_chart_data = {
-                        "title": pie_metric.name,
-                        "items": pie_chart_items
-                    }
-
-    # Build rows
-    rows = []
-    for project_id, metrics_dict in project_metric_map.items():
-        project = Project.objects.get(id=project_id)
-
-        # Find latest current_value_date across all metrics for this project
-        latest_date = (
-            project.metrics.aggregate(
-                latest=Max("current_value_date")
-            )["latest"]
-        )
-
-        row = [project_name_map[project_id]]
-        for agg in agg_qs:
-            value = metrics_dict.get(agg.id, None)
-            row.append(value)
-
-        # Append Last Updated as the final column
-        row.append(latest_date.date().isoformat() if latest_date else None)
-        rows.append(row)
-
-    table = AggregateMetricTypeTable(headers=headers, rows=rows)
-
-    # Calculate distinct projects count
-    projects_count = Project.objects.filter(
-        metrics__aggregate_metric__in=agg_qs
-    ).distinct().count()
-
-    # Convert chart data map to sorted list for Recharts
-    chart_data = sorted(chart_data_map.values(), key=lambda x: x['month'])
-
-    return AggregateMetricTypeResponse(
-        type_name=display,
-        description=obj.description,
-        projects_count=projects_count,
-        metrics=metrics_out,
-        table=table,
-        charts=chart_data if chart_data else None,
-        pie_chart=pie_chart_data if pie_chart_items else None,
-    )
 
 # -----------------------------
 # Overview page function
@@ -737,13 +743,13 @@ def dynamic_project_content(slug):
 
     return content
 
-
 # -----------------------------
 # Routes
 # -----------------------------
 
 @app.get("/", summary="Root endpoint", dependencies=[])
-def read_root():
+@limiter.limit("20/minute")
+def read_root(request: Request):
     return {
         "message": "CARBON Copy API. See the documentation at /docs",
         "docs_url": "/docs"
@@ -779,7 +785,8 @@ def read_root():
         }
     }
 )
-def get_impact_projects():
+@limiter.limit("20/minute")
+def get_impact_projects(request: Request):
     with transaction.atomic():
         projects = Project.objects.all().order_by("name")
     return [
@@ -828,7 +835,8 @@ def get_impact_projects():
         404: {"description": "Project not found"}
     }
 )
-def get_project_metrics_data(baserow_id: int):
+@limiter.limit("20/minute")
+def get_project_metrics_data(baserow_id: int, request: Request):
     naive_latest_date = datetime.now()
     settings.TIME_ZONE
     today = make_aware(naive_latest_date)
@@ -910,7 +918,8 @@ def get_project_metrics_data(baserow_id: int):
             }
         }
 )
-def get_impact_feed():
+@limiter.limit("20/minute")
+def get_impact_feed(request: Request):
     file_path = os.path.join(settings.STATIC_ROOT, "impact_feed.json")
     with open(file_path, "r") as _file:
         data = json.load(_file)
@@ -965,7 +974,8 @@ def get_impact_feed():
         }
     }
 )
-def get_projects():
+@limiter.limit("20/minute")
+def get_projects(request: Request):
     p_list = []
     file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
     with open(file_path, "r") as _file:
@@ -1019,8 +1029,9 @@ def get_projects():
         }
     }
 )
-def get_landscape():
-    p_list = get_projects()
+@limiter.limit("20/minute")
+def get_landscape(request: Request):
+    p_list = get_projects(request)
 
     categories_map = {}
     sdg_dict = {}
@@ -1075,7 +1086,8 @@ def get_landscape():
         }
     }
 )
-def get_token_list():
+@limiter.limit("20/minute")
+def get_token_list(request: Request):
     token_list = []
     token_data_list = []
     combined_list = []
@@ -1175,7 +1187,8 @@ def get_token_list():
         }
     }
 )
-def get_news_list():
+@limiter.limit("20/minute")
+def get_news_list(request: Request):
     news_list = []
 
     params = "&size=100&order_by=-Created on"
@@ -1220,7 +1233,8 @@ def get_news_list():
         }
     }
 )
-def get_cc_newsletter():
+@limiter.limit("20/minute")
+def get_cc_newsletter(request: Request):
     newsletter_list = []
 
     r = requests.get("https://paragraph.xyz/api/blogs/rss/@carboncopy")
@@ -1267,7 +1281,8 @@ def get_cc_newsletter():
         }
     }
 )
-def category_projects(slug):
+@limiter.limit("20/minute")
+def category_projects(slug, request: Request):
     p_list = []
     comp_list = []
     category_news_list = []
@@ -1441,7 +1456,8 @@ def category_projects(slug):
         }
     }
 )
-def get_project_details(project_slug: str):
+@limiter.limit("20/minute")
+def get_project_details(project_slug: str, request: Request):
     p_list = []
     file_path = os.path.join(settings.STATIC_ROOT, "projects.json")
     with open(file_path, "r") as _file:
@@ -1470,7 +1486,8 @@ def get_project_details(project_slug: str):
         }
     }
 )
-def get_dynamic_project_details(project_slug: str):
+@limiter.limit("20/minute")
+def get_dynamic_project_details(project_slug: str, request: Request):
     content = dynamic_project_content(slug=project_slug)
     return content
 
@@ -1493,7 +1510,8 @@ def get_dynamic_project_details(project_slug: str):
         }
     }
 )
-def get_aggregate_metric_types():
+@limiter.limit("20/minute")
+def get_aggregate_metric_types(request: Request):
     from .models import AggregateMetricType
     with transaction.atomic():
         types = AggregateMetricType.objects.all().order_by("name")
@@ -1514,10 +1532,33 @@ def get_aggregate_metric_types():
     summary="Get aggregate metrics by Type",
     description="Returns the aggregate metrics for the given type slug. The type slug must exist in Aggregate Metric Type table."
 )
-def aggregate_metric_type_endpoint(slug: str):
+@limiter.limit("20/minute")
+def aggregate_metric_type_endpoint(slug: str, request: Request) -> AggregateMetricTypeResponse:
     with transaction.atomic():
-        data = get_aggregate_metric_type_db_optimized(slug, "type")
-    return data
+        try:
+            obj = AggregateMetricType.objects.get(slug=slug)
+        except AggregateMetricType.DoesNotExist:
+            raise HTTPException(
+                status_code=404,
+                detail="Invalid aggregate metric type"
+            )
+        aggs = AggregateMetric.objects.filter(type=obj)
+
+        result = _build_metric_group(
+            aggs,
+            chart_flag_field="chart",
+            include_pie=True,
+            metric_type=obj,
+        )
+
+        return AggregateMetricTypeResponse(
+            type_name=obj.name,
+            description=obj.description,
+            projects_count=Project.objects.filter(
+                metrics__aggregate_metric__in=aggs
+            ).distinct().count(),
+            **result,
+        )
 
 @app.get(
     "/sdg",
@@ -1538,24 +1579,43 @@ def aggregate_metric_type_endpoint(slug: str):
         }
     }
 )
-def get_aggregate_metric_types():
+@limiter.limit("20/minute")
+def get_sdg_list(request: Request):
     sdgs = SDG.objects.all()
     sdg_out = []
 
     for sdg in sdgs:
-        agg_qs = AggregateMetric.objects.filter(sdg=sdg)
+        agg_qs = (
+            AggregateMetric.objects
+            .filter(sdg=sdg)
+            .select_related("type")
+        )
 
-        metrics_out = []
+        grouped_metrics = {}
+
         for agg in agg_qs:
-            data = _agg_metric_calc(agg)
-            metrics_out.append(data[0])  # AggregateMetricItem
+            agg_item, _ = _agg_metric_calc(agg)
+
+            metric_type = agg.type
+            type_key = metric_type.slug if metric_type else "uncategorized"
+
+            if type_key not in grouped_metrics:
+                grouped_metrics[type_key] = {
+                    "type": {
+                        "name": metric_type.name if metric_type else "Uncategorized",
+                        "slug": metric_type.slug if metric_type else "uncategorized",
+                    },
+                    "metrics": [],
+                }
+
+            grouped_metrics[type_key]["metrics"].append(agg_item)
 
         sdg_out.append(
             SDGList(
                 name=sdg.name,
                 description=sdg.description,
                 slug=sdg.slug,
-                metrics=metrics_out,
+                metric_groups=list(grouped_metrics.values()),
             )
         )
 
@@ -1564,14 +1624,50 @@ def get_aggregate_metric_types():
 @app.get(
     "/sdg/{slug}",
     dependencies=[],
-    response_model=AggregateMetricTypeResponse,
+    response_model=SDGDetailResponse,
     summary="Get aggregate metric data by SDG",
     description="Returns the aggregate metrics for the given SDG slug. The SDG slug must exist in the SDG table."
 )
-def aggregate_metric_type_endpoint(slug: str):
+@limiter.limit("20/minute")
+def get_sdg_detail(slug: str, request: Request) -> SDGDetailResponse:
     with transaction.atomic():
-        data = get_aggregate_metric_type_db_optimized(slug, "sdg")
-    return data
+        sdg = SDG.objects.get(slug=slug)
+
+        agg_qs = (
+            AggregateMetric.objects
+            .filter(sdg=sdg)
+            .select_related("type")
+        )
+
+    grouped = defaultdict(list)
+    for agg in agg_qs:
+        grouped[agg.type].append(agg)
+
+    groups_out = []
+
+    for metric_type, aggs in grouped.items():
+        result = _build_metric_group(
+            aggs,
+            chart_flag_field="sdg_chart",
+        )
+
+        groups_out.append(
+            SDGMetricGroup(
+                type={
+                    "name": metric_type.name if metric_type else "Uncategorized",
+                    "description": metric_type.description if metric_type else "Aggregate metrics don't have a type",
+                    "slug": metric_type.slug if metric_type else "uncategorized",
+                },
+                **result,
+            )
+        )
+
+    return SDGDetailResponse(
+        name=sdg.name,
+        description=sdg.description,
+        slug=sdg.slug,
+        groups=groups_out,
+    )
 
 @app.get(
     "/overview",
@@ -1579,7 +1675,8 @@ def aggregate_metric_type_endpoint(slug: str):
     response_model=OverviewResponse,
     summary="Overview of Funding Metrics"
 )
-def get_overview():
+@limiter.limit("20/minute")
+def get_overview(request: Request):
     return get_overview_data()
 
 @app.get(
@@ -1589,11 +1686,13 @@ def get_overview():
     summary="Venture Funding Overview",
     description="Returns total venture funding, deals, charts, project breakdown, and current year deals"
 )
-def venture_funding_endpoint():
+@limiter.limit("20/minute")
+def venture_funding_endpoint(request: Request):
     return get_venture_funding_data()
 
-@app.get("/link-preview", dependencies=[Depends(get_api_key)])
-async def link_preview(url: str):
+@app.get("/link-preview", dependencies=[Depends(get_api_key)], include_in_schema=False)
+@limiter.limit("20/minute")
+async def link_preview(url: str, request: Request):
     import requests
     from bs4 import BeautifulSoup
 
@@ -1609,3 +1708,33 @@ async def link_preview(url: str):
         "description": get_meta("og:description"),
         "image": get_meta("og:image"),
     }
+
+# @app.post("/altcha", include_in_schema=False)
+# @limiter.limit("10/minute")
+# async def altcha_challenge(request: Request):
+#     options = ChallengeOptions(
+#         expires=datetime.now() + timedelta(hours=1),
+#         max_number=100000, # The maximum random number
+#         hmac_key=os.getenv("ALTCHA_HMAC_KEY"),
+#     )
+#     return create_challenge(options)
+
+# @app.get("/register", response_class=HTMLResponse, include_in_schema=False)
+# @limiter.limit("10/minute")
+# async def register_form(request: Request):
+#     return templates.TemplateResponse("register.html", {"request": request})
+
+# @app.post("/register", response_class=HTMLResponse, include_in_schema=False)
+# @limiter.limit("10/minute")
+# async def register_api_key(request: Request, name: str = Form(...), altcha: str = Form(...)):
+#     # Verify ALTCHA
+#     if not altcha.verify(altcha):
+#         return templates.TemplateResponse("register.html", {"request": request, "error": "CAPTCHA verification failed. Try again."})
+    
+#     try:
+#         with transaction.atomic():
+#             api_key = APIKey(name=name)
+#             api_key.save()
+#         return templates.TemplateResponse("success.html", {"request": request, "key": api_key.key})
+#     except Exception as e:
+#         return templates.TemplateResponse("register.html", {"request": request, "error": "Registration failed. Try again."})
