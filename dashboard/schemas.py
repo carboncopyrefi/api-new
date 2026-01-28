@@ -145,7 +145,7 @@ class AggregateMetricTypeResponse(BaseModel):
     type_name: str
     description: Optional[str] = None
     metrics: List[AggregateMetricItem]
-    table: AggregateMetricTypeTable
+    table: Optional[AggregateMetricTypeTable]
     projects_count: int = Field(..., description="Number of distinct projects contributing to this metric type")
     charts: Optional[List[dict]] = Field(None, description="Chart data for Recharts visualization")
     pie_chart: Optional[PieChartData] = Field(

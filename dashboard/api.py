@@ -318,19 +318,121 @@ def _agg_metric_calc(agg: str):
         percent_change_28d=percent_change_28d,
     ), pm_qs
 
+# ---------------------
+# Main Aggregator function
+# ---------------------
+def get_aggregate_metric_type_db_optimized(slug: str) -> AggregateMetricTypeResponse:
+    """
+    Returns the aggregate metric type with aggregated sums, percent changes,
+    and a list of projects and their project metric values for each aggregate metric.
+    """
+    
+    agg_qs = AggregateMetric.objects.filter(type__slug=slug)
+    
+    metrics_out = []
+
+    # Build a map: {project_id: {metric_id: value}}
+    project_metric_map = {}
+    project_name_map = {}
+
+    chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
+    chart_data_map = defaultdict(dict)
+
+    for agg in agg_qs:
+        
+        # --- Run metric calculations and percent change ---
+        agg_item, pm_qs = _agg_metric_calc(agg)
+        metrics_out.append(agg_item)
+
+        # --- Fill project metric mapping ---
+        for pm in pm_qs.prefetch_related('projects'):
+            for project in pm.projects.all():
+                project_id = project.id
+                project_name_map[project_id] = project.name
+                if project_id not in project_metric_map:
+                    project_metric_map[project_id] = {}
+                project_metric_map[project_id][agg.id] = pm.current_value
+
+        # --- Chart Data ---
+        # 1. Collect month ranges across all metrics
+        all_months = set()
+        metric_month_maps = {}
+
+        for agg in chart_metrics:
+            month_values = (
+                MetricData.objects
+                .filter(project_metrics__aggregate_metric=agg)
+                .annotate(month=TruncMonth('date'))
+                .values('month')
+                .annotate(total=Coalesce(Sum('value'), 0.0))
+                .order_by('month')
+            )
+
+            # Store per-metric data
+            raw_month_map = {
+                entry['month'].strftime('%Y-%m'): float(entry['total'] or 0.0)
+                for entry in month_values
+            }
+            metric_month_maps[agg.name] = raw_month_map
+
+            # Add these months into global axis
+            for entry in month_values:
+                all_months.add(entry['month'])
+
+        # 2. Build full continuous month axis (min → max)
+        if all_months:
+            min_month = min(all_months)
+            max_month = max(all_months)
+
+            current = min_month
+            month_axis = []
+            while current <= max_month:
+                month_axis.append(current.strftime('%Y-%m'))
+                current += relativedelta(months=1)
+
+        # 3. Fill data for each metric using running totals
+        for agg in chart_metrics:
+            raw_month_map = metric_month_maps.get(agg.name, {})
+            running_total = 0.0
+            last_value = 0.0
+
+            for date_str in month_axis:
+                chart_data_map[date_str]["month"] = date_str
+
+                if date_str in raw_month_map:
+                    running_total += raw_month_map[date_str]
+                    last_value = running_total
+
+                chart_data_map[date_str][agg.name] = last_value
+
+        # 4. Convert chart_data_map to sorted list
+        chart_data = [chart_data_map[m] for m in sorted(chart_data_map)]
+
+    # Convert chart data map to sorted list for Recharts
+    chart_data = sorted(chart_data_map.values(), key=lambda x: x['month'])
+
+    return AggregateMetricTypeResponse(
+        type_name=slug,
+        projects_count=0,
+        metrics=metrics_out,
+        table=None,
+        charts=chart_data if chart_data else None,
+    )
+
 # -----------------------------
 # Overview page function
 # -----------------------------
 def get_overview_data() -> OverviewResponse:
     # Fetch three types
     with transaction.atomic():
-        investment = get_aggregate_metric_type_db_optimized("investment", "type")
-        grants = get_aggregate_metric_type_db_optimized("grants", "type")
-        loans = get_aggregate_metric_type_db_optimized("lending", "type")
+        investment = get_aggregate_metric_type_db_optimized("investment")
+        grants = get_aggregate_metric_type_db_optimized("grants")
+        loans = get_aggregate_metric_type_db_optimized("loans")
 
     def extract(metric_resp: AggregateMetricTypeResponse) -> OverviewMetric:
         # Use the first metric (assuming each type only has one top-level aggregate)
         m = metric_resp.metrics[0]
+
         return OverviewMetric(
             current=m.value,
             change7d=round(m.percent_change_7d,2),
@@ -354,8 +456,6 @@ def get_overview_data() -> OverviewResponse:
     )
 
     # Build combined timeseries using the three metrics
-    # (for now just use investment.timeseries as example)
-    # Later, you might want to sum across them at each date
     timeseries = []
     inv_ts = {e["month"]: e["Investment in Impact Projects"] for e in investment.charts or []}
     gr_ts = {e["month"]: e["Granted to Impact Projects"] for e in grants.charts or []}
