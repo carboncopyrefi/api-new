@@ -427,7 +427,7 @@ def get_overview_data() -> OverviewResponse:
     with transaction.atomic():
         investment = get_aggregate_metric_type_db_optimized("investment")
         grants = get_aggregate_metric_type_db_optimized("grants")
-        loans = get_aggregate_metric_type_db_optimized("loans")
+        loans = get_aggregate_metric_type_db_optimized("lending")
 
     def extract(metric_resp: AggregateMetricTypeResponse) -> OverviewMetric:
         # Use the first metric (assuming each type only has one top-level aggregate)
