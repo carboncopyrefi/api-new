@@ -569,7 +569,7 @@ def get_venture_funding_data() -> VentureFundingResponse:
 # Project dynamic content function
 # -----------------------------
 
-def dynamic_project_content(slug):
+def dynamic_project_content(slug, request):
     content = {}
     
     params = "filter__field_1248804__equal=" + slug
@@ -836,10 +836,11 @@ def dynamic_project_content(slug):
     # Get Company Impact table data
     impact = []
     try:
-        impact = get_project_metrics_data(baserow_id=company_id)
+        impact = get_project_metrics_data(baserow_id=company_id, request=request)
         content["impact"] = impact
     except Exception as e:
         content["impact"] = None
+        print(e)
 
     return content
 
@@ -1588,7 +1589,7 @@ def get_project_details(project_slug: str, request: Request):
 )
 @limiter.limit("20/minute")
 def get_dynamic_project_details(project_slug: str, request: Request):
-    content = dynamic_project_content(slug=project_slug)
+    content = dynamic_project_content(slug=project_slug, request=request)
     return content
 
 @app.get(
