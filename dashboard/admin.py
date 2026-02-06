@@ -154,11 +154,10 @@ class ProjectAdmin(admin.ModelAdmin):
         for project in queryset:
             try:
                 response = utils.get_baserow_project_data(project.baserow_id)
-
-                project.name = response.get("name", project.name)
-                project.slug = response.get("slug", project.slug)
-                project.logo_url = response.get("logo", project.logo_url)
-                project.save(update_fields=["name", "slug", "logo_url", "last_updated"])
+                project.name = response.get("Name", project.name)
+                project.slug = response.get("Slug", project.slug)
+                project.logo_url = response.get("Logo", project.logo_url)
+                project.save(update_fields=["name", "slug", "logo_url"])
 
                 updated_count += 1
 
