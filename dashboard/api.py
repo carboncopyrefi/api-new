@@ -67,27 +67,6 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ---------------------
-# Helper: validate type_slug
-# ---------------------
-def _get_type_display(type_slug: str) -> Optional[str]:
-    """Return the display name (name) for a type_slug or None if invalid."""
-    try:
-        return AggregateMetricType.objects.get(slug=type_slug).name
-    except AggregateMetricType.DoesNotExist:
-        return None
-    
-# ---------------------
-# Helper: validate sdg_slug
-# ---------------------
-def _get_sdg_display(sdg_slug: str) -> Optional[str]:
-    """Return the display name (name) for a sdg_slug or None if invalid."""
-    try:
-        return SDG.objects.get(slug=sdg_slug).name
-    except SDG.DoesNotExist:
-        return None
-
-
-# ---------------------
 # Helper: table builder
 # ---------------------
 def _build_table(aggs, project_metric_map, project_name_map):
@@ -318,130 +297,34 @@ def _agg_metric_calc(agg: str):
         percent_change_28d=percent_change_28d,
     ), pm_qs
 
-# ---------------------
-# Main Aggregator function
-# ---------------------
-def get_aggregate_metric_type_db_optimized(slug: str) -> AggregateMetricTypeResponse:
-    """
-    Returns the aggregate metric type with aggregated sums, percent changes,
-    and a list of projects and their project metric values for each aggregate metric.
-    """
-    
-    agg_qs = AggregateMetric.objects.filter(type__slug=slug)
-    
-    metrics_out = []
-
-    # Build a map: {project_id: {metric_id: value}}
-    project_metric_map = {}
-    project_name_map = {}
-
-    chart_metrics = agg_qs.filter(chart=True)  # only metrics that should have charts
-    chart_data_map = defaultdict(dict)
-
-    for agg in agg_qs:
-        
-        # --- Run metric calculations and percent change ---
-        agg_item, pm_qs = _agg_metric_calc(agg)
-        metrics_out.append(agg_item)
-
-        # --- Fill project metric mapping ---
-        for pm in pm_qs.prefetch_related('projects'):
-            for project in pm.projects.all():
-                project_id = project.id
-                project_name_map[project_id] = project.name
-                if project_id not in project_metric_map:
-                    project_metric_map[project_id] = {}
-                project_metric_map[project_id][agg.id] = pm.current_value
-
-        # --- Chart Data ---
-        # 1. Collect month ranges across all metrics
-        all_months = set()
-        metric_month_maps = {}
-
-        for agg in chart_metrics:
-            month_values = (
-                MetricData.objects
-                .filter(project_metrics__aggregate_metric=agg)
-                .annotate(month=TruncMonth('date'))
-                .values('month')
-                .annotate(total=Coalesce(Sum('value'), 0.0))
-                .order_by('month')
-            )
-
-            # Store per-metric data
-            raw_month_map = {
-                entry['month'].strftime('%Y-%m'): float(entry['total'] or 0.0)
-                for entry in month_values
-            }
-            metric_month_maps[agg.name] = raw_month_map
-
-            # Add these months into global axis
-            for entry in month_values:
-                all_months.add(entry['month'])
-
-        # 2. Build full continuous month axis (min → max)
-        if all_months:
-            min_month = min(all_months)
-            max_month = max(all_months)
-
-            current = min_month
-            month_axis = []
-            while current <= max_month:
-                month_axis.append(current.strftime('%Y-%m'))
-                current += relativedelta(months=1)
-
-        # 3. Fill data for each metric using running totals
-        for agg in chart_metrics:
-            raw_month_map = metric_month_maps.get(agg.name, {})
-            running_total = 0.0
-            last_value = 0.0
-
-            for date_str in month_axis:
-                chart_data_map[date_str]["month"] = date_str
-
-                if date_str in raw_month_map:
-                    running_total += raw_month_map[date_str]
-                    last_value = running_total
-
-                chart_data_map[date_str][agg.name] = last_value
-
-        # 4. Convert chart_data_map to sorted list
-        chart_data = [chart_data_map[m] for m in sorted(chart_data_map)]
-
-    # Convert chart data map to sorted list for Recharts
-    chart_data = sorted(chart_data_map.values(), key=lambda x: x['month'])
-
-    return AggregateMetricTypeResponse(
-        type_name=slug,
-        projects_count=0,
-        metrics=metrics_out,
-        table=None,
-        charts=chart_data if chart_data else None,
-    )
-
 # -----------------------------
 # Overview page function
 # -----------------------------
 def get_overview_data() -> OverviewResponse:
-    # Fetch three types
+    # Fetch aggregate metrics for each type
     with transaction.atomic():
-        investment = get_aggregate_metric_type_db_optimized("investment")
-        grants = get_aggregate_metric_type_db_optimized("grants")
-        loans = get_aggregate_metric_type_db_optimized("lending")
+        investment_aggs = AggregateMetric.objects.filter(type__slug="investment")
+        grants_aggs = AggregateMetric.objects.filter(type__slug="grants")
+        loans_aggs = AggregateMetric.objects.filter(type__slug="lending")
 
-    def extract(metric_resp: AggregateMetricTypeResponse) -> OverviewMetric:
+    # Build metric groups for each type
+    investment_group = _build_metric_group(investment_aggs, chart_flag_field="chart")
+    grants_group = _build_metric_group(grants_aggs, chart_flag_field="chart")
+    loans_group = _build_metric_group(loans_aggs, chart_flag_field="chart")
+
+    def extract(metric_group: dict) -> OverviewMetric:
         # Use the first metric (assuming each type only has one top-level aggregate)
-        m = metric_resp.metrics[0]
+        m = metric_group["metrics"][0]
 
         return OverviewMetric(
             current=m.value,
-            change7d=round(m.percent_change_7d,2),
-            change28d=round(m.percent_change_28d,2),
+            change7d=round(m.percent_change_7d, 2) if m.percent_change_7d is not None else None,
+            change28d=round(m.percent_change_28d, 2) if m.percent_change_28d is not None else None,
         )
 
-    inv = extract(investment)
-    gr = extract(grants)
-    ln = extract(loans)
+    inv = extract(investment_group)
+    gr = extract(grants_group)
+    ln = extract(loans_group)
 
     total_current = (inv.current or 0) + (gr.current or 0) + (ln.current or 0)
 
@@ -451,15 +334,37 @@ def get_overview_data() -> OverviewResponse:
 
     total = OverviewMetric(
         current=total_current,
-        change7d=round(safe_avg(inv.change7d, gr.change7d, ln.change7d),2),
-        change28d=round(safe_avg(inv.change28d, gr.change28d, ln.change28d),2),
+        change7d=round(safe_avg(inv.change7d, gr.change7d, ln.change7d), 2) if safe_avg(inv.change7d, gr.change7d, ln.change7d) is not None else None,
+        change28d=round(safe_avg(inv.change28d, gr.change28d, ln.change28d), 2) if safe_avg(inv.change28d, gr.change28d, ln.change28d) is not None else None,
     )
 
-    # Build combined timeseries using the three metrics
+    # Build combined timeseries using the three metric groups' charts
     timeseries = []
-    inv_ts = {e["month"]: e["Investment in Impact Projects"] for e in investment.charts or []}
-    gr_ts = {e["month"]: e["Granted to Impact Projects"] for e in grants.charts or []}
-    ln_ts = {e["month"]: e["Lent to Impact Projects"] for e in loans.charts or []}
+    inv_ts = {}
+    gr_ts = {}
+    ln_ts = {}
+
+    # Extract chart data for each type
+    if investment_group["charts"]:
+        for e in investment_group["charts"]:
+            for key, value in e.items():
+                if key != "month":
+                    inv_ts[e["month"]] = value
+                    break
+
+    if grants_group["charts"]:
+        for e in grants_group["charts"]:
+            for key, value in e.items():
+                if key != "month":
+                    gr_ts[e["month"]] = value
+                    break
+
+    if loans_group["charts"]:
+        for e in loans_group["charts"]:
+            for key, value in e.items():
+                if key != "month":
+                    ln_ts[e["month"]] = value
+                    break
 
     all_months = sorted(set(inv_ts) | set(gr_ts) | set(ln_ts))
 
@@ -646,9 +551,10 @@ def dynamic_project_content(slug, request):
             for item in article_list:
                 item_dict = vars(item)
                 content_list.append(item_dict)
-        content["content"] = content_list
+        content["feed"] = content_list
+
     except Exception as e:
-        content["content"] = None
+        content["feed"] = None
 
     # Get data from News table
     n_list = []
@@ -840,7 +746,6 @@ def dynamic_project_content(slug, request):
         content["impact"] = impact
     except Exception as e:
         content["impact"] = None
-        print(e)
 
     return content
 
@@ -1810,26 +1715,22 @@ async def link_preview(url: str, request: Request):
         "image": get_meta("og:image"),
     }
 
-# @app.post("/altcha", include_in_schema=False)
-# @limiter.limit("10/minute")
-# async def altcha_challenge(request: Request):
-#     options = ChallengeOptions(
-#         expires=datetime.now() + timedelta(hours=1),
-#         max_number=100000, # The maximum random number
-#         hmac_key=os.getenv("ALTCHA_HMAC_KEY"),
-#     )
-#     return create_challenge(options)
 
 # @app.get("/register", response_class=HTMLResponse, include_in_schema=False)
 # @limiter.limit("10/minute")
-# async def register_form(request: Request):
+# def register_form(request: Request):
 #     return templates.TemplateResponse("register.html", {"request": request})
 
 # @app.post("/register", response_class=HTMLResponse, include_in_schema=False)
 # @limiter.limit("10/minute")
-# async def register_api_key(request: Request, name: str = Form(...), altcha: str = Form(...)):
-#     # Verify ALTCHA
-#     if not altcha.verify(altcha):
+# def register_api_key(request: Request, name: str = Form(...), captcha_response: str = Form(alias="frc-captcha-response")):
+#     if name is None or captcha_response is None:
+#         return templates.TemplateResponse("register.html", {"request": request, "error": "Please provide a client name and complete the CAPTCHA."})
+
+#     captcha = requests.post("https://global.frcapi.com/api/v2/captcha/siteverify", json={"response": captcha_response, "sitekey": os.getenv("FRIENDLY_CAPTCHA_SITEKEY")}, headers={"X-API-Key": os.getenv("FRIENDLY_CAPTCHA_API_KEY")})
+#     result = captcha.json()
+
+#     if result["success"] is not True:
 #         return templates.TemplateResponse("register.html", {"request": request, "error": "CAPTCHA verification failed. Try again."})
     
 #     try:
@@ -1838,4 +1739,4 @@ async def link_preview(url: str, request: Request):
 #             api_key.save()
 #         return templates.TemplateResponse("success.html", {"request": request, "key": api_key.key})
 #     except Exception as e:
-#         return templates.TemplateResponse("register.html", {"request": request, "error": "Registration failed. Try again."})
+#         return templates.TemplateResponse("register.html", {"request": request, "error": "Registration failed. Please try again."})

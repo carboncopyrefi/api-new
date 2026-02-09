@@ -46,7 +46,6 @@ class ProjectSelectForm(forms.ModelForm):
             try:
                 response = requests.get(API_URL, timeout=5, headers={"X-API-Key": API_KEY})
                 response.raise_for_status()
-                print(response.json())
                 ProjectSelectForm._cached_projects = response.json()
             except Exception as e:
                 ProjectSelectForm._cached_projects = []
