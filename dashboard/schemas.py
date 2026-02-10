@@ -84,6 +84,7 @@ class ProjectMetricData(BaseModel):
     description: Optional[str] = Field(None, example="Total installed renewable energy capacity in megawatts")
     percent_change_7d: Optional[float] = None
     percent_change_28d: Optional[float] = None
+    chart: Optional[list] = Field(None, description="Time-series chart data with cumulative values", example=[{"month": "2025-01", "Installed Capacity": 25.4}])
 
 class AggregateMetricTypeList(BaseModel):
     name: str = Field(..., example="Total Installed Capacity")

@@ -867,6 +867,47 @@ def get_project_metrics_data(baserow_id: int, request: Request):
                 cumulative_data.append((date, running_total))
         return cumulative_data
 
+    def build_chart_for_metric(metric):
+        """Build chart data for a single metric with cumulative monthly totals."""
+        with transaction.atomic():
+            month_values = (
+                MetricData.objects
+                .filter(project_metrics=metric)
+                .annotate(month=TruncMonth("date"))
+                .values("month")
+                .annotate(total=Coalesce(Sum("value"), 0.0))
+                .order_by("month")
+            )
+
+            raw = {
+                entry["month"].strftime("%Y-%m"): float(entry["total"] or 0.0)
+                for entry in month_values
+            }
+
+            if not raw:
+                return None
+
+            all_months = [entry["month"] for entry in month_values]
+            current = min(all_months)
+            max_month = max(all_months)
+
+            month_axis = []
+            while current <= max_month:
+                month_axis.append(current.strftime("%Y-%m"))
+                current += relativedelta(months=1)
+
+            chart_data = []
+            running = 0.0
+
+            for month in month_axis:
+                month_entry = {"month": month}
+                if month in raw:
+                    running += raw[month]
+                month_entry[metric.name] = running
+                chart_data.append(month_entry)
+
+            return chart_data
+
     return [
     (
         lambda cd: (
@@ -893,6 +934,7 @@ def get_project_metrics_data(baserow_id: int, request: Request):
                     )) not in (None, 0)
                     else None
                 ),
+                chart=build_chart_for_metric(metric),
             )
         )(datetime.now().date())
     )(build_cumulative(metric))
