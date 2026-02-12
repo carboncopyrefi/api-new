@@ -188,3 +188,15 @@ class VentureFundingResponse(BaseModel):
     charts: dict  # {"funding_by_month": [...], "deals_by_month": [...]}
     projects: List[VentureFundingProject]
     current_year_deals: List[VentureFundingDeal]
+
+class FundraisingItem(BaseModel):
+    type: str = Field(..., example="Grant")
+    type_id: int = Field(..., example=1)
+    amount: float = Field(..., example=5000.0)
+    date: Optional[str] = Field(None, example="2025-07-15")
+    project: str = Field(..., example="Project Name")
+    reference_url: Optional[str] = Field(None, example="https://example.com/grant-details")
+
+class FundingOverviewResponse(BaseModel):
+    venture_funding: VentureFundingResponse
+    pgf_funding: VentureFundingResponse

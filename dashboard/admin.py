@@ -12,6 +12,7 @@ from django.utils.safestring import mark_safe
 from django.http import HttpRequest
 from .services.project_json import generate_projects_json
 from .services.impact_feed import generate_impact_json
+from .services.fundraising_json import generate_fundraising_json
 from django.urls import path
 
 API_URL = os.getenv('CC_API_URL')
@@ -327,6 +328,11 @@ class ProjectAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.generate_impact_json_view),
                 name="generate-impact-json",
             ),
+            path(
+                "generate-fundraising-json/",
+                self.admin_site.admin_view(self.generate_fundraising_json_view),
+                name="generate-fundraising-json",
+            ),
         ]
         return custom_urls + urls
     
@@ -362,10 +368,27 @@ class ProjectAdmin(admin.ModelAdmin):
             )
         return redirect("..")
     
+    def generate_fundraising_json_view(self, request):
+        try:
+            path = generate_fundraising_json()
+            self.message_user(
+                request,
+                f"fundraising.json generated successfully at {path}",
+                level=messages.SUCCESS,
+            )
+        except Exception as e:
+            self.message_user(
+                request,
+                f"Failed to generate fundraising.json: {e}",
+                level=messages.ERROR,
+            )
+        return redirect("..")
+    
     def changelist_view(self, request, extra_context=None):
         extra_context = extra_context or {}
         extra_context["generate_json_button"] = True
         extra_context["generate_impact_feed_button"] = True
+        extra_context["generate_fundraising_json_button"] = True
         return super().changelist_view(request, extra_context)
 
 @admin.register(AggregateMetric)

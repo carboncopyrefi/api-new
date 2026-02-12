@@ -43,6 +43,7 @@ from .schemas import (
     AggregateMetricTypeResponse,
     OverviewResponse,
     OverviewMetric,
+    FundingOverviewResponse,
     VentureFundingResponse,
     VentureFundingMetrics,
     VentureFundingProject,
@@ -404,18 +405,88 @@ def get_overview_data() -> OverviewResponse:
 # -----------------------------
 # Venture Funding function
 # -----------------------------
-def get_venture_funding_data() -> VentureFundingResponse:
-    page_size = 200
-    params = (
-        f"size={page_size}"
-        f"&order_by=-Date"
-        f"&filter__field_2209786__single_select_is_any_of=1686865,1688192"
+def get_funding_data() -> VentureFundingResponse:
+    file_path = os.path.join(settings.STATIC_ROOT, "fundraising.json")
+    with open(file_path, "r") as _file:
+        data = json.load(_file)
+        pgf_list = data["pgf"]
+        venture_funding_list = data["venture_funding"]    
+
+    # Public Goods Funding (PGF)
+    total_pgf_funding = 0
+    total_pgf_deals = len(pgf_list)
+
+    pgf_funding_by_year = defaultdict(float)
+    pgf_deals_by_year = defaultdict(int)
+    pgf_project_funding = defaultdict(lambda: {"total": 0, "count": 0})
+    previous_year_projects = defaultdict(lambda: {"total": 0, "count": 0})
+
+    previous_year = datetime.now().year - 1
+
+    for r in pgf_list:
+        amount = float(r["amount"])
+        total_pgf_funding += amount
+
+        project = r["project"] if r.get("project") else "Unknown"
+        pgf_project_funding[project]["total"] += amount
+        pgf_project_funding[project]["count"] += 1
+
+        if r["type"] == "Giveth":
+            continue
+        else:
+            date = datetime.strptime(r["date"], "%Y-%m-%d") if r.get("date") else None
+            year_key = str(date.year)
+            pgf_funding_by_year[year_key] += amount
+            pgf_deals_by_year[year_key] += 1
+
+            if date.year == previous_year:
+                previous_year_projects[project]["total"] += amount
+                previous_year_projects[project]["count"] += 1
+
+    pgf_top_10_projects = sorted(
+        [
+            VentureFundingProject(
+                name=name,
+                total_funding=pf["total"],
+                deal_count=pf["count"],
+            )
+            for name, pf in previous_year_projects.items()
+        ],
+        key=lambda p: p.total_funding,
+        reverse=True,
+    )[:6]
+
+    pgf_funding = VentureFundingResponse(
+        metrics=VentureFundingMetrics(
+            total_funding=total_pgf_funding,
+            total_deals=total_pgf_deals,
+        ),
+        charts={
+            "funding_by_year": [
+                {"x": k, "y": v} for k, v in sorted(pgf_funding_by_year.items())
+            ],
+            "deals_by_year": [
+                {"x": k, "y": v} for k, v in sorted(pgf_deals_by_year.items())
+            ],
+        },
+        projects=sorted(
+            [
+                VentureFundingProject(
+                    name=name,
+                    total_funding=pf["total"],
+                    deal_count=pf["count"],
+                )
+                for name, pf in pgf_project_funding.items()
+            ],
+            key=lambda p: p.total_funding,
+            reverse=True,
+        ),
+        current_year_deals=[VentureFundingDeal(project=p.name, amount=p.total_funding) for p in pgf_top_10_projects],
     )
 
-    records = get_all_baserow_data(os.getenv("BASEROW_TABLE_COMPANY_FUNDRAISING"), params)
-
+    # Venture funding
     total_funding = 0
-    total_deals = len(records)
+    total_deals = len(venture_funding_list)
 
     funding_by_year = defaultdict(float)
     deals_by_year = defaultdict(int)
@@ -424,10 +495,10 @@ def get_venture_funding_data() -> VentureFundingResponse:
 
     this_year = datetime.now().year
 
-    for r in records:
-        amount = float(r["Amount"])
-        project = r["Company"][0]["value"] if r.get("Company") else "Unknown"
-        date = datetime.strptime(r["Date"], "%Y-%m-%d")
+    for r in venture_funding_list:
+        amount = float(r["amount"])
+        project = r["project"] if r.get("project") else "Unknown"
+        date = datetime.strptime(r["date"], "%Y-%m-%d")
         year_key = str(date.year)
 
         total_funding += amount
@@ -442,7 +513,7 @@ def get_venture_funding_data() -> VentureFundingResponse:
                 VentureFundingDeal(project=project, amount=amount)
             )
 
-    return VentureFundingResponse(
+    venture_funding = VentureFundingResponse(
         metrics=VentureFundingMetrics(
             total_funding=total_funding,
             total_deals=total_deals,
@@ -465,10 +536,15 @@ def get_venture_funding_data() -> VentureFundingResponse:
                 for name, pf in project_funding.items()
             ],
             key=lambda p: p.total_funding,
-            reverse=True,  # largest funding first
+            reverse=True,
         ),
         current_year_deals=current_year_deals,
     )
+
+    return {
+        "pgf_funding": pgf_funding,
+        "venture_funding": venture_funding
+    }
 
 # -----------------------------
 # Project dynamic content function
@@ -1728,15 +1804,15 @@ def get_overview(request: Request):
     return get_overview_data()
 
 @app.get(
-    "/venture-funding",
-    dependencies=[Depends(get_api_key)],
-    response_model=VentureFundingResponse,
+    "/funding",
+    dependencies=[],
+    response_model=FundingOverviewResponse,
     summary="Venture Funding Overview",
-    description="Returns total venture funding, deals, charts, project breakdown, and current year deals"
+    description="Returns total funding, deals, charts, project breakdown, and current year deals"
 )
 @limiter.limit("20/minute")
-def venture_funding_endpoint(request: Request):
-    return get_venture_funding_data()
+def funding_endpoint(request: Request):
+    return get_funding_data()
 
 @app.get("/link-preview", dependencies=[Depends(get_api_key)], include_in_schema=False)
 @limiter.limit("20/minute")
